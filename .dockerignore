@@ -1,0 +1,6 @@
+.git
+.env
+.env.*
+client_secret_*.json
+bin/
+data/

@@ -1,0 +1,7 @@
+# secrets
+.env
+client_secret_*.json
+
+# local data
+/data/
+/bin/
