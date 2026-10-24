@@ -45,6 +45,9 @@ func run() error {
 	}
 
 	srv := httpapi.New(cfg, st, web.Static())
+	if err := srv.SyncClips(ctx); err != nil {
+		return err
+	}
 	go srv.CleanupLoop(ctx)
 
 	httpSrv := &http.Server{

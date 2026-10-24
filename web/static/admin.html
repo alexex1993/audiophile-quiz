@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Админка · Тест на аудиофила</title>
+  <title data-en="Admin · Audiophile Test">Админка · Тест на аудиофила</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,15 +15,16 @@
     <div class="container">
       <a class="brand" href="/">
         <span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"><path d="M4 10v4M8 6v12M12 3v18M16 7v10M20 10v4"/></svg></span>
-        Админка
+        <span data-en="Admin">Админка</span>
       </a>
       <nav class="nav">
-        <a class="btn btn-ghost btn-sm" href="/">К тесту</a>
-        <button class="btn btn-ghost btn-sm" onclick="logout()">Выйти</button>
+        <a class="btn btn-ghost btn-sm" href="/" data-en="To the test">К тесту</a>
+        <button class="btn btn-ghost btn-sm" onclick="logout()" data-en="Sign out">Выйти</button>
       </nav>
     </div>
   </header>
   <main class="container" id="app"><div class="spinner"></div></main>
+  <footer><a href="#" class="lang-switch"></a></footer>
   <script src="/common.js"></script>
   <script src="/stats.js"></script>
   <script src="/admin.js"></script>

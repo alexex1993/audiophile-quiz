@@ -1,11 +1,16 @@
 // Admin statistics tab: aggregated results with charts. Blue marks are what
 // players actually did, orange is what pure guessing (p = 1/4) would give.
 
-const ANSWERS = ["Первый lossless", "Второй lossless", "Оба lossless", "Оба пережатые"];
-const ANSWERS_SHORT = ["1-й lossless", "2-й lossless", "Оба lossless", "Оба пережатые"];
+const ANSWERS = LANG === "ru"
+  ? ["Первый lossless", "Второй lossless", "Оба lossless", "Оба пережатые"]
+  : ["First lossless", "Second lossless", "Both lossless", "Both compressed"];
+const ANSWERS_SHORT = LANG === "ru"
+  ? ["1-й lossless", "2-й lossless", "Оба lossless", "Оба пережатые"]
+  : ["1st lossless", "2nd lossless", "Both lossless", "Both compressed"];
 const CHANCE = 0.25;
+const ACCURACY_LEGEND = [["bar", t("Доля верных", "Share correct")], ["line", t("Случайное угадывание, 25%", "Random guessing, 25%")]];
 
-const statsState = { days: 0, admins: true, data: null };
+const statsState = { days: 0, admins: true, difficulty: "", data: null };
 let statsResizeTimer;
 
 window.addEventListener("resize", () => {
@@ -22,16 +27,25 @@ async function loadStats() {
     sec.innerHTML = `
       <div class="stats-filters">
         <div class="seg" id="stats-days">
-          ${[[7, "7 дней"], [30, "30 дней"], [90, "90 дней"], [0, "Всё время"]].map(([d, l]) =>
+          ${[[7, t("7 дней", "7 days")], [30, t("30 дней", "30 days")], [90, t("90 дней", "90 days")], [0, t("Всё время", "All time")]].map(([d, l]) =>
             `<button data-days="${d}" class="${d === statsState.days ? "active" : ""}">${l}</button>`).join("")}
         </div>
+        <div class="seg" id="stats-level">
+          ${[["", t("Все уровни", "All levels"), ""], ...cfg.difficulties.map((l) => [l.name, levelTitle(l.name), `AAC ${l.kbps} kbps`])].map(([v, l, tip]) =>
+            `<button data-level="${esc(v)}" title="${esc(tip)}" class="${v === statsState.difficulty ? "active" : ""}">${esc(l)}</button>`).join("")}
+        </div>
         <label class="check"><span class="switch"><input type="checkbox" id="stats-admins" ${statsState.admins ? "checked" : ""}><span></span></span>
-          Учитывать попытки админов</label>
+          ${t("Учитывать попытки админов", "Include admins' attempts")}</label>
       </div>
       <div id="stats-body"><div class="card"><div class="spinner" style="margin:30px auto"></div></div></div>`;
     sec.querySelectorAll("#stats-days button").forEach((b) => (b.onclick = () => {
       statsState.days = Number(b.dataset.days);
       sec.querySelectorAll("#stats-days button").forEach((x) => x.classList.toggle("active", x === b));
+      loadStats();
+    }));
+    sec.querySelectorAll("#stats-level button").forEach((b) => (b.onclick = () => {
+      statsState.difficulty = b.dataset.level;
+      sec.querySelectorAll("#stats-level button").forEach((x) => x.classList.toggle("active", x === b));
       loadStats();
     }));
     sec.querySelector("#stats-admins").onchange = (e) => {
@@ -43,7 +57,7 @@ async function loadStats() {
   body.classList.add("loading"); // keep the previous render while refetching
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-    const q = new URLSearchParams({ days: statsState.days, admins: statsState.admins ? "1" : "0", tz });
+    const q = new URLSearchParams({ days: statsState.days, admins: statsState.admins ? "1" : "0", tz, difficulty: statsState.difficulty });
     statsState.data = await api(`/api/admin/stats?${q}`);
     renderStats(statsState.data);
   } catch (e) {
@@ -63,23 +77,28 @@ function renderStats(d) {
 
   body.innerHTML = `
     <div class="grid grid-4">
-      ${statTile("Завершённых попыток", fmtInt(s.attempts),
-        s.unfinished ? `ещё ${s.unfinished} ${plural(s.unfinished, "брошена", "брошены", "брошено")} на середине` : "без брошенных")}
-      ${statTile("Игроков", fmtInt(s.players), s.players ? `в среднем ${fmtNum(s.attempts / s.players, 1)} ${plural(Math.round(s.attempts / s.players), "попытка", "попытки", "попыток")}` : "—")}
-      ${statTile("Верных ответов", s.questions ? fmtPct(accuracy) : "—",
-        s.questions ? `${fmtInt(s.correct)} из ${fmtInt(s.questions)} · угадывание 25% · ${pText(pAll)}` : "—")}
-      ${statTile("Лучше угадывания", s.attempts ? fmtPct(significant / s.attempts) : "—",
-        s.attempts ? `${significant} ${plural(significant, "попытка", "попытки", "попыток")} с p < 0,05` : "—")}
+      ${statTile(t("Завершённых попыток", "Finished attempts"), fmtInt(s.attempts),
+        s.unfinished
+          ? `${t("ещё", "")} ${s.unfinished} ${plural(s.unfinished, "брошена|брошены|брошено", "more abandoned|more abandoned")} ${t("на середине", "midway")}`
+          : t("без брошенных", "none abandoned"))}
+      ${statTile(t("Игроков", "Players"), fmtInt(s.players), s.players
+        ? `${t("в среднем", "on average")} ${fmtNum(s.attempts / s.players, 1)} ${plural(Math.round(s.attempts / s.players), "попытка|попытки|попыток", "attempt|attempts")}`
+        : "—")}
+      ${statTile(t("Верных ответов", "Correct answers"), s.questions ? fmtPct(accuracy) : "—",
+        s.questions ? `${fmtInt(s.correct)} ${t("из", "of")} ${fmtInt(s.questions)} · ${t("угадывание", "guessing")} 25% · ${pText(pAll)}` : "—")}
+      ${statTile(t("Лучше угадывания", "Better than guessing"), s.attempts ? fmtPct(significant / s.attempts) : "—",
+        s.attempts ? `${significant} ${plural(significant, "попытка|попытки|попыток", "attempt|attempts")} ${t("с p < 0,05", "with p < 0.05")}` : "—")}
     </div>
     <div class="stats-stack" id="stats-charts"></div>`;
 
   const charts = body.querySelector("#stats-charts");
   if (!s.attempts) {
-    charts.innerHTML = `<div class="card chart-empty">За выбранный период нет завершённых попыток.</div>`;
+    charts.innerHTML = `<div class="card chart-empty">${t("За выбранный период нет завершённых попыток.", "No finished attempts in the selected period.")}</div>`;
     return;
   }
 
   charts.append(scoreChart(scores));
+  if (!statsState.difficulty) charts.append(levelChart(d.by_difficulty || []));
 
   const row1 = h(`<div class="grid grid-2"></div>`);
   row1.append(typeChart(d.confusion || []), confusionChart(d.confusion || []));
@@ -121,23 +140,24 @@ function scoreChart(scores) {
     maxPoints += b.total * b.count;
   }
   const labels = bins.map((_, i) => (single ? String(i) : `${i * 10}–${i === 9 ? 100 : i * 10 + 9}%`));
-  const mean = single ? `${fmtNum(points / attempts, 1)} из ${n}` : fmtPct(points / maxPoints);
+  const mean = single ? `${fmtNum(points / attempts, 1)} ${t("из", "of")} ${n}` : fmtPct(points / maxPoints);
   const meanChance = single ? `${fmtNum(n * CHANCE, 1)}` : "25%";
 
   return chartCard({
-    title: "Распределение результатов",
-    sub: `Средний результат ${mean}; при случайных ответах было бы ${meanChance}. Если синие столбцы совпадают с оранжевой линией — люди угадывают.`,
-    legend: [["bar", "Попытки"], ["line", "Если бы все отвечали наугад"]],
+    title: t("Распределение результатов", "Score distribution"),
+    sub: t(`Средний результат ${mean}; при случайных ответах было бы ${meanChance}. Если синие столбцы совпадают с оранжевой линией — люди угадывают.`,
+      `Average score ${mean}; random answers would give ${meanChance}. If the blue bars follow the orange line, people are guessing.`),
+    legend: [["bar", t("Попытки", "Attempts")], ["line", t("Если бы все отвечали наугад", "If everyone answered at random")]],
     draw: (el) => columnChart(el, {
       labels,
       values: bins.map((b) => b.actual),
       expected: bins.map((b) => b.expected),
-      xTitle: single ? "верных ответов" : "доля верных",
-      tip: (i) => [single ? `${labels[i]} из ${n} верных` : `${labels[i]} верных`,
-        [[fmtInt(bins[i].actual), plural(bins[i].actual, "попытка", "попытки", "попыток"), "series"],
-         [fmtNum(bins[i].expected, 1), "ожидалось при угадывании", "chance"]]],
+      xTitle: single ? t("верных ответов", "correct answers") : t("доля верных", "share correct"),
+      tip: (i) => [single ? t(`${labels[i]} из ${n} верных`, `${labels[i]} of ${n} correct`) : `${labels[i]} ${t("верных", "correct")}`,
+        [[fmtInt(bins[i].actual), plural(bins[i].actual, "попытка|попытки|попыток", "attempt|attempts"), "series"],
+         [fmtNum(bins[i].expected, 1), t("ожидалось при угадывании", "expected by guessing"), "chance"]]],
     }),
-    table: [[single ? "Верных" : "Доля верных", "Попыток", "Ожидалось наугад"],
+    table: [[single ? t("Верных", "Correct") : t("Доля верных", "Share correct"), t("Попыток", "Attempts"), t("Ожидалось наугад", "Expected at random")],
       bins.map((b, i) => [labels[i], fmtInt(b.actual), fmtNum(b.expected, 1)])],
   });
 }
@@ -150,16 +170,16 @@ function typeChart(confusion) {
     return { answered, correct };
   });
   return chartCard({
-    title: "Точность по типу вопроса",
-    sub: "Какой вариант был верным — и как часто его угадывали.",
-    legend: [["bar", "Доля верных"], ["line", "Случайное угадывание, 25%"]],
+    title: t("Точность по типу вопроса", "Accuracy by question type"),
+    sub: t("Какой вариант был верным — и как часто его угадывали.", "Which option was correct — and how often it was guessed."),
+    legend: ACCURACY_LEGEND,
     draw: (el) => columnChart(el, {
       labels: ANSWERS_SHORT,
       values: rows.map((r) => (r.answered ? (r.correct / r.answered) * 100 : 0)),
       percent: true, ref: 25, caps: true,
       tip: (i) => accuracyTip(ANSWERS[i], rows[i]),
     }),
-    table: accuracyTable("Верный ответ", ANSWERS, rows),
+    table: accuracyTable(t("Верный ответ", "Correct answer"), ANSWERS, rows),
   });
 }
 
@@ -171,8 +191,9 @@ function confusionChart(confusion) {
   const fav = colSum.indexOf(Math.max(...colSum));
 
   const card = chartCard({
-    title: "Матрица ответов",
-    sub: all ? `Строка — верный ответ, столбец — что выбрали; рамкой отмечены попадания. Чаще всего отвечают «${ANSWERS[fav]}» — ${fmtPct(colSum[fav] / all)} ответов.` : "",
+    title: t("Матрица ответов", "Answer matrix"),
+    sub: all ? t(`Строка — верный ответ, столбец — что выбрали; рамкой отмечены попадания. Чаще всего отвечают «${ANSWERS[fav]}» — ${fmtPct(colSum[fav] / all)} ответов.`,
+      `Rows are the correct answer, columns what was picked; hits are outlined. The most common answer is “${ANSWERS[fav]}” — ${fmtPct(colSum[fav] / all)} of answers.`) : "",
     draw: (el) => {
       const cell = (i, j) => {
         const share = rowSum[i] ? m[i][j] / rowSum[i] : 0;
@@ -183,87 +204,105 @@ function confusionChart(confusion) {
           style="background:rgba(74,143,248,${alpha.toFixed(3)});color:${ink}">${fmtPct(share)}<small>${fmtInt(m[i][j])}</small></td>`;
       };
       el.innerHTML = `<div class="table-wrap"><table class="heat">
-        <thead><tr><th class="rowh">верный ↓ / ответ →</th>${ANSWERS_SHORT.map((a) => `<th>${esc(a)}</th>`).join("")}<th>всего</th></tr></thead>
+        <thead><tr><th class="rowh">${t("верный ↓ / ответ →", "correct ↓ / answer →")}</th>${ANSWERS_SHORT.map((a) => `<th>${esc(a)}</th>`).join("")}<th>${t("всего", "total")}</th></tr></thead>
         <tbody>${m.map((r, i) => `<tr><th class="rowh">${esc(ANSWERS_SHORT[i])}</th>${r.map((_, j) => cell(i, j)).join("")}
           <td class="margin">${fmtInt(rowSum[i])}</td></tr>`).join("")}
-          <tr><th class="rowh">выбирали</th>${colSum.map((c) => `<td class="margin">${all ? fmtPct(c / all) : "—"}</td>`).join("")}<td class="margin">${fmtInt(all)}</td></tr>
+          <tr><th class="rowh">${t("выбирали", "picked")}</th>${colSum.map((c) => `<td class="margin">${all ? fmtPct(c / all) : "—"}</td>`).join("")}<td class="margin">${fmtInt(all)}</td></tr>
         </tbody></table></div>`;
       el.querySelectorAll("td[data-i]").forEach((td) => {
         const i = +td.dataset.i, j = +td.dataset.j;
-        bindTip(td, () => [`Верно: ${ANSWERS[i]}`, [[fmtInt(m[i][j]), `ответили «${ANSWERS[j]}»`, "series"],
-          [rowSum[i] ? fmtPct(m[i][j] / rowSum[i]) : "—", "от вопросов этого типа"]]]);
+        bindTip(td, () => [`${t("Верно", "Correct")}: ${ANSWERS[i]}`, [[fmtInt(m[i][j]), t(`ответили «${ANSWERS[j]}»`, `answered “${ANSWERS[j]}”`), "series"],
+          [rowSum[i] ? fmtPct(m[i][j] / rowSum[i]) : "—", t("от вопросов этого типа", "of questions of this type")]]]);
       });
     },
-    table: [["Верный ответ", ...ANSWERS_SHORT, "Всего"], m.map((r, i) => [ANSWERS[i], ...r.map(fmtInt), fmtInt(rowSum[i])])],
+    table: [[t("Верный ответ", "Correct answer"), ...ANSWERS_SHORT, t("Всего", "Total")], m.map((r, i) => [ANSWERS[i], ...r.map(fmtInt), fmtInt(rowSum[i])])],
   });
   return card;
 }
 
+function levelChart(byLevel) {
+  const rows = cfg.difficulties.map((l) => {
+    const r = byLevel.find((x) => x.difficulty === l.name) || { attempts: 0, answered: 0, correct: 0 };
+    return { label: levelTitle(l.name), sub: `AAC ${l.kbps} kbps · ${fmtInt(r.attempts)} ${plural(r.attempts, "попытка|попытки|попыток", "attempt|attempts")}`,
+      answered: r.answered, correct: r.correct };
+  });
+  return chartCard({
+    title: t("Точность по уровню сложности", "Accuracy by difficulty"),
+    sub: t("Чем выше битрейт AAC, тем ближе результат должен быть к угадыванию.",
+      "The higher the AAC bitrate, the closer results should get to guessing."),
+    legend: ACCURACY_LEGEND,
+    draw: (el) => hbarChart(el, rows),
+    table: accuracyTable(t("Уровень", "Level"), rows.map((r) => r.label), rows),
+  });
+}
+
 function trackChart(byTrack) {
-  const rows = byTrack.map((t) => ({
-    label: t.title + (t.track_id ? "" : " (удалён)"),
-    sub: t.artist,
-    answered: t.answered,
-    correct: t.correct,
+  const rows = byTrack.map((tr) => ({
+    label: tr.title + (tr.track_id ? "" : t(" (удалён)", " (deleted)")),
+    sub: tr.artist,
+    answered: tr.answered,
+    correct: tr.correct,
   })).sort((a, b) => b.correct / b.answered - a.correct / a.answered || b.answered - a.answered);
   return chartCard({
-    title: "Точность по трекам",
-    sub: "На каких треках разницу слышат лучше всего. При малом числе ответов доля сильно шумит — смотрите на n и доверительный интервал в подсказке.",
-    legend: [["bar", "Доля верных"], ["line", "Случайное угадывание, 25%"]],
+    title: t("Точность по трекам", "Accuracy by track"),
+    sub: t("На каких треках разницу слышат лучше всего. При малом числе ответов доля сильно шумит — смотрите на n и доверительный интервал в подсказке.",
+      "Which tracks make the difference easiest to hear. With few answers the share is noisy — check n and the confidence interval in the tooltip."),
+    legend: ACCURACY_LEGEND,
     draw: (el) => hbarChart(el, rows),
-    table: accuracyTable("Трек", rows.map((r) => (r.sub ? `${r.sub} — ${r.label}` : r.label)), rows),
+    table: accuracyTable(t("Трек", "Track"), rows.map((r) => (r.sub ? `${r.sub} — ${r.label}` : r.label)), rows),
   });
 }
 
 function formatChart(byTrack) {
   const groups = new Map();
-  for (const t of byTrack) {
-    const key = t.bit_depth ? `${t.bit_depth} bit / ${fmtNum(t.sample_rate / 1000, 1)} kHz` : "удалённые треки";
-    const g = groups.get(key) || { label: key, sub: "", answered: 0, correct: 0, tracks: 0, rate: t.sample_rate || 0, bits: t.bit_depth || 0 };
-    g.answered += t.answered;
-    g.correct += t.correct;
+  for (const tr of byTrack) {
+    const key = tr.bit_depth ? `${tr.bit_depth} bit / ${fmtNum(tr.sample_rate / 1000, 1)} kHz` : t("удалённые треки", "deleted tracks");
+    const g = groups.get(key) || { label: key, sub: "", answered: 0, correct: 0, tracks: 0, rate: tr.sample_rate || 0, bits: tr.bit_depth || 0 };
+    g.answered += tr.answered;
+    g.correct += tr.correct;
     g.tracks++;
     groups.set(key, g);
   }
   const rows = [...groups.values()].sort((a, b) => b.bits - a.bits || b.rate - a.rate);
-  rows.forEach((g) => (g.sub = `${g.tracks} ${plural(g.tracks, "трек", "трека", "треков")}`));
+  rows.forEach((g) => (g.sub = `${g.tracks} ${plural(g.tracks, "трек|трека|треков", "track|tracks")}`));
   return chartCard({
-    title: "Точность по формату исходника",
-    sub: "Помогает ли hi-res услышать разницу.",
-    legend: [["bar", "Доля верных"], ["line", "Случайное угадывание, 25%"]],
+    title: t("Точность по формату исходника", "Accuracy by source format"),
+    sub: t("Помогает ли hi-res услышать разницу.", "Does hi-res help to hear the difference?"),
+    legend: ACCURACY_LEGEND,
     draw: (el) => hbarChart(el, rows),
-    table: accuracyTable("Формат", rows.map((r) => r.label), rows),
+    table: accuracyTable(t("Формат", "Format"), rows.map((r) => r.label), rows),
   });
 }
 
 function positionChart(byPosition) {
   return chartCard({
-    title: "Точность по номеру вопроса",
-    sub: "Устают ли уши к концу теста.",
-    legend: [["bar", "Доля верных"], ["line", "Случайное угадывание, 25%"]],
+    title: t("Точность по номеру вопроса", "Accuracy by question number"),
+    sub: t("Устают ли уши к концу теста.", "Do ears get tired towards the end of the test?"),
+    legend: ACCURACY_LEGEND,
     draw: (el) => columnChart(el, {
       labels: byPosition.map((r) => String(r.key)),
       values: byPosition.map((r) => (r.answered ? (r.correct / r.answered) * 100 : 0)),
-      percent: true, ref: 25, xTitle: "номер вопроса",
-      tip: (i) => accuracyTip(`Вопрос ${byPosition[i].key}`, byPosition[i]),
+      percent: true, ref: 25, xTitle: t("номер вопроса", "question number"),
+      tip: (i) => accuracyTip(`${t("Вопрос", "Question")} ${byPosition[i].key}`, byPosition[i]),
     }),
-    table: accuracyTable("Вопрос", byPosition.map((r) => r.key), byPosition),
+    table: accuracyTable(t("Вопрос", "Question"), byPosition.map((r) => r.key), byPosition),
   });
 }
 
 function attemptNoChart(byAttempt) {
   const label = (k) => (k >= 10 ? "10+" : String(k));
   return chartCard({
-    title: "Прогресс игроков",
-    sub: "Точность в первой, второй, третьей… попытке игрока. Растёт — значит, слух тренируется.",
-    legend: [["bar", "Доля верных"], ["line", "Случайное угадывание, 25%"]],
+    title: t("Прогресс игроков", "Player progress"),
+    sub: t("Точность в первой, второй, третьей… попытке игрока. Растёт — значит, слух тренируется.",
+      "Accuracy in a player's first, second, third… attempt. If it grows, the ears are learning."),
+    legend: ACCURACY_LEGEND,
     draw: (el) => columnChart(el, {
       labels: byAttempt.map((r) => label(r.key)),
       values: byAttempt.map((r) => (r.answered ? (r.correct / r.answered) * 100 : 0)),
-      percent: true, ref: 25, xTitle: "номер попытки", caps: byAttempt.length <= 6,
-      tip: (i) => accuracyTip(`Попытка №${label(byAttempt[i].key)}`, byAttempt[i]),
+      percent: true, ref: 25, xTitle: t("номер попытки", "attempt number"), caps: byAttempt.length <= 6,
+      tip: (i) => accuracyTip(`${t("Попытка №", "Attempt #")}${label(byAttempt[i].key)}`, byAttempt[i]),
     }),
-    table: accuracyTable("Попытка", byAttempt.map((r) => label(r.key)), byAttempt),
+    table: accuracyTable(t("Попытка", "Attempt"), byAttempt.map((r) => label(r.key)), byAttempt),
   });
 }
 
@@ -285,32 +324,32 @@ function activityChart(daily) {
     }
     buckets.push(b);
   }
-  const label = (b) => (step > 1 ? "с " : "") + fmtShortDate(b.day);
+  const label = (b) => (step > 1 ? t("с ", "from ") : "") + fmtShortDate(b.day);
   return chartCard({
-    title: "Активность",
-    sub: `Завершённые попытки по ${step > 1 ? "неделям" : "дням"}.`,
+    title: t("Активность", "Activity"),
+    sub: step > 1 ? t("Завершённые попытки по неделям.", "Finished attempts per week.") : t("Завершённые попытки по дням.", "Finished attempts per day."),
     draw: (el) => columnChart(el, {
       labels: buckets.map(label),
       values: buckets.map((b) => b.attempts),
-      tip: (i) => [step > 1 ? `Неделя ${label(buckets[i])}` : fmtShortDate(buckets[i].day, true),
-        [[fmtInt(buckets[i].attempts), plural(buckets[i].attempts, "попытка", "попытки", "попыток"), "series"],
-         [buckets[i].answered ? fmtPct(buckets[i].correct / buckets[i].answered) : "—", "верных ответов"]]],
+      tip: (i) => [step > 1 ? `${t("Неделя", "Week")} ${label(buckets[i])}` : fmtShortDate(buckets[i].day, true),
+        [[fmtInt(buckets[i].attempts), plural(buckets[i].attempts, "попытка|попытки|попыток", "attempt|attempts"), "series"],
+         [buckets[i].answered ? fmtPct(buckets[i].correct / buckets[i].answered) : "—", t("верных ответов", "correct answers")]]],
     }),
-    table: [["Дата", "Попыток", "Верных ответов"],
+    table: [[t("Дата", "Date"), t("Попыток", "Attempts"), t("Верных ответов", "Correct answers")],
       buckets.filter((b) => b.attempts).map((b) => [label(b), fmtInt(b.attempts), fmtPct(b.correct / b.answered)])],
   });
 }
 
 function accuracyTip(title, r) {
   const [lo, hi] = wilson(r.correct, r.answered);
-  return [title, [[r.answered ? fmtPct(r.correct / r.answered) : "—", "верных ответов", "series"],
-    [`${fmtInt(r.correct)} из ${fmtInt(r.answered)}`, "ответов"],
-    [`${fmtPct(lo)}–${fmtPct(hi)}`, "95% интервал"],
-    [fmtP(binomTail(r.correct, r.answered)), "p (отличие от угадывания)"]]];
+  return [title, [[r.answered ? fmtPct(r.correct / r.answered) : "—", t("верных ответов", "correct answers"), "series"],
+    [`${fmtInt(r.correct)} ${t("из", "of")} ${fmtInt(r.answered)}`, t("ответов", "answers")],
+    [`${fmtPct(lo)}–${fmtPct(hi)}`, t("95% интервал", "95% interval")],
+    [fmtP(binomTail(r.correct, r.answered)), t("p (отличие от угадывания)", "p (difference from guessing)")]]];
 }
 
 function accuracyTable(head, labels, rows) {
-  return [[head, "Ответов", "Верных", "Доля", "95% интервал", "p"], rows.map((r, i) => {
+  return [[head, t("Ответов", "Answers"), t("Верных", "Correct"), t("Доля", "Share"), t("95% интервал", "95% interval"), "p"], rows.map((r, i) => {
     const [lo, hi] = wilson(r.correct, r.answered);
     return [labels[i], fmtInt(r.answered), fmtInt(r.correct), r.answered ? fmtPct(r.correct / r.answered) : "—",
       `${fmtPct(lo)}–${fmtPct(hi)}`, fmtP(binomTail(r.correct, r.answered))];
@@ -323,7 +362,7 @@ function accuracyTable(head, labels, rows) {
 function chartCard({ title, sub, legend, draw, table }) {
   const card = h(`<div class="card chart-card">
     <div class="chart-head"><div style="flex:1;min-width:0"><h3>${esc(title)}</h3>${sub ? `<div class="chart-sub">${esc(sub)}</div>` : ""}</div>
-      <button class="chart-toggle">Таблица</button></div>
+      <button class="chart-toggle">${t("Таблица", "Table")}</button></div>
     ${legend ? `<div class="legend">${legend.map(([k, l]) => `<span><i class="${k === "line" ? "line" : ""}"></i>${esc(l)}</span>`).join("")}</div>` : ""}
     <div class="chart-body"></div>
     <div class="chart-table hidden"><table class="table"><thead><tr>${table[0].map((c) => `<th>${esc(c)}</th>`).join("")}</tr></thead>
@@ -338,7 +377,7 @@ function chartCard({ title, sub, legend, draw, table }) {
     tableEl.classList.toggle("hidden", !showTable);
     bodyEl.classList.toggle("hidden", showTable);
     legendEl?.classList.toggle("hidden", showTable);
-    e.target.textContent = showTable ? "График" : "Таблица";
+    e.target.textContent = showTable ? t("График", "Chart") : t("Таблица", "Table");
     if (!showTable) card._draw();
   };
   return card;
@@ -437,7 +476,7 @@ function columnChart(el, o) {
 // hbarChart lists accuracy rows as horizontal bars on a fixed 0–100% scale.
 function hbarChart(el, rows) {
   if (!rows.length) {
-    el.innerHTML = `<div class="chart-empty">Нет данных</div>`;
+    el.innerHTML = `<div class="chart-empty">${t("Нет данных", "No data")}</div>`;
     return;
   }
   el.innerHTML = `<div class="hbars">${rows.map((r, i) => {
@@ -545,11 +584,11 @@ function wilson(k, n) {
 
 // ---------- formatting ----------
 
-function fmtInt(n) { return Math.round(n).toLocaleString("ru-RU"); }
-function fmtNum(n, digits) { return n.toLocaleString("ru-RU", { maximumFractionDigits: digits }); }
+function fmtInt(n) { return Math.round(n).toLocaleString(LOCALE); }
+function fmtNum(n, digits) { return n.toLocaleString(LOCALE, { maximumFractionDigits: digits }); }
 function fmtPct(x) { return `${Math.round(x * 100)}%`; }
-function fmtP(p) { return p < 0.001 ? "< 0,001" : p.toLocaleString("ru-RU", { maximumFractionDigits: 3 }); }
-function pText(p) { return p < 0.001 ? "p\u00a0<\u00a00,001" : `p\u00a0=\u00a0${fmtP(p)}`; }
+function fmtP(p) { return p < 0.001 ? `< ${fmtNum(0.001, 3)}` : fmtNum(p, 3); }
+function pText(p) { return p < 0.001 ? `p\u00a0<\u00a0${fmtNum(0.001, 3)}` : `p\u00a0=\u00a0${fmtP(p)}`; }
 
 function localISODate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -560,5 +599,5 @@ function addDays(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 function fmtShortDate(iso, long = false) {
-  return new Date(`${iso}T00:00:00Z`).toLocaleDateString("ru-RU", { day: "numeric", month: long ? "long" : "short", timeZone: "UTC" });
+  return new Date(`${iso}T00:00:00Z`).toLocaleDateString(LOCALE, { day: "numeric", month: long ? "long" : "short", timeZone: "UTC" });
 }

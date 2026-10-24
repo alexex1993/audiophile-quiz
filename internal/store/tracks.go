@@ -86,6 +86,12 @@ func (s *Store) UpdateTrack(ctx context.Context, id int64, artist, title string,
 	return err
 }
 
+// UpdateTrackClips records that a track's clips were re-encoded for other bitrates.
+func (s *Store) UpdateTrackClips(ctx context.Context, id int64, aacBitrate string, fileSize int64) error {
+	_, err := s.db.Exec(ctx, `UPDATE tracks SET aac_bitrate = $2, file_size = $3 WHERE id = $1`, id, aacBitrate, fileSize)
+	return err
+}
+
 func (s *Store) DeleteTrack(ctx context.Context, id int64) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM tracks WHERE id = $1`, id)
 	if err == nil && tag.RowsAffected() == 0 {

@@ -126,21 +126,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 }
 
 // writeStoreError maps store errors to HTTP responses.
-func writeStoreError(w http.ResponseWriter, err error) {
+func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "не найдено")
+		writeError(w, http.StatusNotFound, tr(r, "не найдено", "not found"))
 	case errors.Is(err, store.ErrLimitReached):
-		writeError(w, http.StatusTooManyRequests, "лимит попыток на эту неделю исчерпан")
+		writeError(w, http.StatusTooManyRequests, tr(r, "на сегодня попытки закончились — приходите позже", "you're out of attempts for today — come back later"))
 	case errors.Is(err, store.ErrNoTracks):
-		writeError(w, http.StatusConflict, "библиотека треков пока пуста")
+		writeError(w, http.StatusConflict, tr(r, "библиотека треков пока пуста", "the track library is empty"))
 	case errors.Is(err, store.ErrAttemptClosed):
-		writeError(w, http.StatusConflict, "эта попытка уже завершена")
+		writeError(w, http.StatusConflict, tr(r, "эта попытка уже завершена", "this attempt is already finished"))
 	case errors.Is(err, store.ErrNotAllAnswers):
-		writeError(w, http.StatusConflict, "ответьте на все вопросы")
+		writeError(w, http.StatusConflict, tr(r, "ответьте на все вопросы", "answer every question first"))
 	default:
 		slog.Error("request failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "внутренняя ошибка сервера")
+		writeError(w, http.StatusInternalServerError, tr(r, "внутренняя ошибка сервера", "internal server error"))
 	}
 }
 

@@ -29,7 +29,7 @@ services:
       DATABASE_URL: postgres://audiophile:${POSTGRES_PASSWORD}@db:5432/audiophile?sslmode=disable
       DATA_DIR: /data
     volumes:
-      - audio:/data          # processed clips (lossless.wav / encoded.wav)
+      - audio:/data          # processed clips (lossless.flac / encoded_<bitrate>.flac)
     ports:
       - "${APP_PORT:-8080}:8080"
 

@@ -152,11 +152,6 @@ main { padding: 40px 0 80px; }
 
 /* ---------- dashboard ---------- */
 .welcome h1 { font-size: clamp(28px, 4vw, 40px); letter-spacing: -0.02em; margin: 6px 0 4px; }
-.quota-dots { display: flex; gap: 10px; margin: 14px 0; }
-.quota-dots span {
-  width: 44px; height: 10px; border-radius: 99px; background: rgba(125,175,255,.15);
-}
-.quota-dots span.on { background: linear-gradient(90deg, var(--accent), var(--accent-3)); box-shadow: 0 0 14px var(--glow); }
 .big-number { font-size: 48px; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
 
 .history { list-style: none; padding: 0; margin: 0; }
@@ -196,7 +191,7 @@ main { padding: 40px 0 80px; }
   transition: transform .15s;
 }
 .play-btn:hover { transform: scale(1.05); }
-.play-btn svg { width: 22px; height: 22px; }
+.play-btn svg { width: 22px; height: 22px; pointer-events: none; }
 .player-label { font-weight: 800; font-size: 18px; }
 .player-sub { font-size: 13px; color: var(--text-faint); font-family: var(--mono); }
 .kbd {
@@ -210,6 +205,7 @@ main { padding: 40px 0 80px; }
 .wave .bars.fill i { background: linear-gradient(180deg, var(--accent-3), var(--accent)); }
 .player-time { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-top: 8px; }
 .loading-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: rgba(56,189,248,.5); border-radius: 2px; transition: width .3s; }
+.player.loading .play-btn, .player.loading .wave { opacity: .5; cursor: progress; }
 
 .question-title { font-size: 18px; font-weight: 700; margin: 6px 0 14px; }
 .options { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -402,3 +398,40 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .chart-tip .tr i { width: 12px; height: 2px; border-radius: 2px; flex: none; }
 .chart-tip .tr b { font-variant-numeric: tabular-nums; }
 .chart-tip .tr span { color: var(--text-faint); }
+
+/* ---------- difficulty ---------- */
+.levels { display: grid; gap: 8px; margin-top: 16px; }
+.option.level { padding: 10px 14px; font-size: 15px; }
+.option.level .num { width: auto; min-width: 40px; padding: 0 6px; }
+.level-pill { white-space: nowrap; padding: 3px 10px; font-size: 12px; }
+.level-pill.level-easy { color: var(--ok); border-color: rgba(52,211,153,.35); }
+.level-pill.level-medium { color: var(--accent-3); border-color: rgba(56,189,248,.4); }
+.level-pill.level-hard { color: var(--warn); border-color: rgba(251,191,36,.4); }
+.level-wrap { position: relative; }
+.level-wrap .level { width: 100%; }
+.level-tip, .level-about { font-size: 13.5px; line-height: 1.5; color: var(--text-dim); }
+.level-tip b, .level-about b { color: var(--text); font-size: 14px; }
+.level-tip p, .level-about p { margin: 6px 0 0; }
+.level-listen span { color: var(--accent-3); font-weight: 700; }
+/* Hover/focus tooltip above the button; above, so the next card can't cover it. */
+.level-tip {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 20;
+  padding: 12px 14px; border-radius: var(--radius-sm);
+  background: var(--card-solid); border: 1px solid var(--line-strong);
+  box-shadow: 0 16px 40px -12px rgba(0, 0, 0, .8);
+  opacity: 0; visibility: hidden; transform: translateY(4px);
+  transition: opacity .15s, transform .15s, visibility .15s; pointer-events: none;
+}
+.level-wrap:hover .level-tip, .level:focus-visible + .level-tip { opacity: 1; visibility: visible; transform: none; }
+.level-about { display: none; margin-top: 12px; padding: 12px 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: rgba(13, 34, 87, .45); }
+/* Touch screens: no hover, so describe the selected level under the picker instead. */
+@media (hover: none) {
+  .level-tip { display: none; }
+  .level-about { display: block; }
+}
+
+/* ---------- after the result: next levels / share card ---------- */
+.next-levels .option.level:disabled { opacity: .5; cursor: not-allowed; }
+.share-card { text-align: center; }
+.share-preview { display: grid; place-items: center; min-height: 120px; }
+.share-preview img { display: block; width: 100%; max-width: 640px; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--line); }

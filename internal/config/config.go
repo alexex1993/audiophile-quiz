@@ -20,11 +20,9 @@ type Config struct {
 
 	AdminEmails map[string]bool
 
-	AttemptsPerWeek  int
-	QuestionsPerQuiz int
-	ClipSeconds      int
-	AACBitrate       string
-	MaxUploadMB      int64
+	AttemptsPerDay int // hidden from players
+	ClipSeconds    int
+	MaxUploadMB    int64
 }
 
 // RedirectURL is the OAuth callback that must be registered in Google Cloud Console.
@@ -44,10 +42,8 @@ func Load() (*Config, error) {
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		AdminEmails:        map[string]bool{},
-		AttemptsPerWeek:    envInt("ATTEMPTS_PER_WEEK", 3),
-		QuestionsPerQuiz:   envInt("QUESTIONS_PER_QUIZ", 12),
+		AttemptsPerDay:     envInt("ATTEMPTS_PER_DAY", 10),
 		ClipSeconds:        envInt("CLIP_SECONDS", 30),
-		AACBitrate:         env("AAC_BITRATE", "128k"),
 		MaxUploadMB:        int64(envInt("MAX_UPLOAD_MB", 1024)),
 	}
 

@@ -1,7 +1,7 @@
 // Admin page: upload tracks, manage the library, view user results.
 
 const app = document.getElementById("app");
-let cfg = { clip_seconds: 30, aac_bitrate: "128k" };
+let cfg = { clip_seconds: 30, difficulties: DEFAULT_LEVELS };
 let previewAudio = new Audio();
 
 init();
@@ -10,15 +10,15 @@ async function init() {
   try {
     const me = await api("/api/me");
     if (!me.is_admin) {
-      app.innerHTML = `<div class="notice error">Доступ только для администраторов (${esc(me.user.email)}).</div>`;
+      app.innerHTML = `<div class="notice error">${t("Доступ только для администраторов", "Admins only")} (${esc(me.user.email)}).</div>`;
       return;
     }
     cfg = await api("/api/config");
   } catch (e) {
     if (e.status === 401) {
       app.innerHTML = `<div class="card center" style="max-width:420px;margin:60px auto">
-        <h2>Вход в админку</h2><p class="muted">Войдите Google-аккаунтом из списка ADMIN_EMAILS.</p>
-        <a class="btn" href="/auth/google/login">Войти через Google</a></div>`;
+        <h2>${t("Вход в админку", "Admin sign-in")}</h2><p class="muted">${t("Войдите Google-аккаунтом из списка ADMIN_EMAILS.", "Sign in with a Google account listed in ADMIN_EMAILS.")}</p>
+        <a class="btn" href="/auth/google/login">${t("Войти через Google", "Sign in with Google")}</a></div>`;
       return;
     }
     app.innerHTML = `<div class="notice error">${esc(e.message)}</div>`;
@@ -27,9 +27,9 @@ async function init() {
 
   app.innerHTML = `
     <div class="row" style="margin-bottom:24px">
-      <div><div class="eyebrow">Управление</div><h1 style="margin:4px 0 0;letter-spacing:-0.02em">Библиотека и результаты</h1></div>
+      <div><div class="eyebrow">${t("Управление", "Management")}</div><h1 style="margin:4px 0 0;letter-spacing:-0.02em">${t("Библиотека и результаты", "Library and results")}</h1></div>
       <span class="spacer"></span>
-      <div class="tabs"><button class="active" data-tab="tracks">Треки</button><button data-tab="users">Пользователи</button><button data-tab="stats">Статистика</button></div>
+      <div class="tabs"><button class="active" data-tab="tracks">${t("Треки", "Tracks")}</button><button data-tab="users">${t("Пользователи", "Users")}</button><button data-tab="stats">${t("Статистика", "Statistics")}</button></div>
     </div>
     <section id="tab-tracks"></section>
     <section id="tab-users" class="hidden"></section>
@@ -52,29 +52,30 @@ function renderUploader() {
   const sec = document.getElementById("tab-tracks");
   sec.innerHTML = `
     <div class="card" id="uploader">
-      <h3>Добавить трек</h3>
+      <h3>${t("Добавить трек", "Add a track")}</h3>
       <p class="muted" style="margin-top:-6px;font-size:14px">
-        Исходник (FLAC, WAV, ALAC, AIFF, WavPack) → отрывок ${cfg.clip_seconds} с →
-        <span class="pill ok">lossless.wav</span> и <span class="pill bad">AAC ${esc(cfg.aac_bitrate)} → encoded.wav</span>.
-        Исходник удаляется с сервера после обработки.
+        ${t("Исходник", "Source")} (FLAC, WAV, ALAC, AIFF, WavPack; ${t("до 24 бит", "up to 24 bit")}) → ${t(`отрывок ${cfg.clip_seconds} с`, `${cfg.clip_seconds} s clip`)} →
+        <span class="pill ok">lossless.flac</span> ${t("и", "and")} <span class="pill bad">AAC ${cfg.difficulties.map((l) => l.kbps).join(" / ")} kbps → encoded_*.flac</span>
+        (${t("по файлу на уровень сложности", "one file per difficulty level")}).
+        ${t("Исходник удаляется с сервера после обработки.", "The source is deleted from the server after processing.")}
       </p>
       <input type="file" id="file" accept=".flac,.wav,.aif,.aiff,.m4a,.alac,.wv,.ape,audio/*" hidden>
-      <div class="dropzone" id="drop"><b>Перетащите файл сюда</b> или нажмите, чтобы выбрать</div>
+      <div class="dropzone" id="drop">${t("<b>Перетащите файл сюда</b> или нажмите, чтобы выбрать", "<b>Drop a file here</b> or click to choose one")}</div>
       <div id="form" class="hidden" style="margin-top:20px">
         <div class="row" style="margin-bottom:12px"><span class="pill accent" id="fname"></span><span class="faint" id="fsize"></span>
-          <span class="spacer"></span><button class="btn btn-ghost btn-sm" id="reset">Другой файл</button></div>
+          <span class="spacer"></span><button class="btn btn-ghost btn-sm" id="reset">${t("Другой файл", "Another file")}</button></div>
         <audio id="local" controls></audio>
-        <div class="clip-range" title="Выбранный отрывок"><div id="range"></div></div>
+        <div class="clip-range" title="${t("Выбранный отрывок", "Selected clip")}"><div id="range"></div></div>
         <div class="grid grid-3" style="margin-top:18px">
-          <div class="field"><label>Исполнитель</label><input class="input" id="artist" placeholder="Pink Floyd"></div>
-          <div class="field"><label>Название</label><input class="input" id="title" placeholder="Time"></div>
-          <div class="field"><label>Начало отрывка (м:сс или секунды)</label>
+          <div class="field"><label>${t("Исполнитель", "Artist")}</label><input class="input" id="artist" placeholder="Pink Floyd"></div>
+          <div class="field"><label>${t("Название", "Title")}</label><input class="input" id="title" placeholder="Time"></div>
+          <div class="field"><label>${t("Начало отрывка (м:сс или секунды)", "Clip start (m:ss or seconds)")}</label>
             <div class="row" style="flex-wrap:nowrap"><input class="input mono" id="start" value="0:00">
-              <button class="btn btn-ghost btn-sm" id="usepos" title="Взять текущую позицию плеера">◉ сейчас</button></div></div>
+              <button class="btn btn-ghost btn-sm" id="usepos" title="${t("Взять текущую позицию плеера", "Use the player's current position")}">◉ ${t("сейчас", "now")}</button></div></div>
         </div>
         <div class="row" style="margin-top:20px">
-          <button class="btn" id="upload">Загрузить и обработать</button>
-          <button class="btn btn-ghost" id="preview">▶ Прослушать отрывок</button>
+          <button class="btn" id="upload">${t("Загрузить и обработать", "Upload and process")}</button>
+          <button class="btn btn-ghost" id="preview">▶ ${t("Прослушать отрывок", "Preview the clip")}</button>
           <span class="spacer"></span>
           <span class="faint" id="status"></span>
         </div>
@@ -82,7 +83,7 @@ function renderUploader() {
       </div>
     </div>
     <div class="card" style="margin-top:20px">
-      <div class="row"><h3 style="margin:0">Треки</h3><span class="spacer"></span><span class="faint" id="count"></span></div>
+      <div class="row"><h3 style="margin:0">${t("Треки", "Tracks")}</h3><span class="spacer"></span><span class="faint" id="count"></span></div>
       <div id="tracks" style="margin-top:12px"><div class="spinner" style="margin:30px auto"></div></div>
     </div>`;
 
@@ -104,7 +105,7 @@ function renderUploader() {
     objectURL = URL.createObjectURL(f);
     local.src = objectURL;
     sec.querySelector("#fname").textContent = f.name;
-    sec.querySelector("#fsize").textContent = `${(f.size / 1048576).toFixed(1)} МБ`;
+    sec.querySelector("#fsize").textContent = `${(f.size / 1048576).toFixed(1)} ${t("МБ", "MB")}`;
     // "Artist - Title.flac" → prefill both fields.
     const base = f.name.replace(/\.[^.]+$/, "").replace(/^\d+[\s.\-_]+/, "");
     const m = base.split(/\s+[-–—]\s+/);
@@ -138,7 +139,7 @@ function renderUploader() {
   };
   sec.querySelector("#preview").onclick = () => {
     const s = parseStart();
-    if (isNaN(s)) return toast("Неверное время начала", true);
+    if (isNaN(s)) return toast(t("Неверное время начала", "Invalid start time"), true);
     local.currentTime = s;
     local.play();
     const stopAt = () => { if (local.currentTime >= s + cfg.clip_seconds) { local.pause(); local.removeEventListener("timeupdate", stopAt); } };
@@ -156,7 +157,7 @@ function renderUploader() {
 
   sec.querySelector("#upload").onclick = () => {
     if (!file) return;
-    if (!sec.querySelector("#title").value.trim()) return toast("Укажите название", true);
+    if (!sec.querySelector("#title").value.trim()) return toast(t("Укажите название", "Enter a title"), true);
     local.pause();
     const fd = new FormData();
     fd.append("artist", sec.querySelector("#artist").value.trim());
@@ -178,11 +179,11 @@ function renderUploader() {
       if (!e.lengthComputable) return;
       const p = (e.loaded / e.total) * 100;
       prog.firstElementChild.style.width = `${p}%`;
-      setStatus(`Загрузка ${Math.round(p)}%`);
+      setStatus(`${t("Загрузка", "Uploading")} ${Math.round(p)}%`);
       if (e.loaded === e.total) {
         prog.classList.add("indeterminate");
         prog.firstElementChild.style.width = "";
-        setStatus("Нарезка и кодирование…");
+        setStatus(t("Нарезка и кодирование…", "Cutting and encoding…"));
       }
     };
     xhr.onload = () => {
@@ -191,19 +192,19 @@ function renderUploader() {
       let data = {};
       try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status === 201) {
-        toast(`Добавлено: ${data.title}`);
+        toast(`${t("Добавлено", "Added")}: ${data.title}`);
         sec.querySelector("#reset").click();
         loadTracks();
       } else {
         setStatus("");
-        toast(data.error || `Ошибка ${xhr.status}`, true);
+        toast(data.error || `${t("Ошибка", "Error")} ${xhr.status}`, true);
       }
     };
     xhr.onerror = () => {
       btn.disabled = false;
       prog.classList.add("hidden");
       setStatus("");
-      toast("Сетевая ошибка при загрузке", true);
+      toast(t("Сетевая ошибка при загрузке", "Network error during upload"), true);
     };
     xhr.send(fd);
   };
@@ -220,39 +221,40 @@ async function loadTracks() {
     box.innerHTML = `<div class="notice error">${esc(e.message)}</div>`;
     return;
   }
-  const active = tracks.filter((t) => t.active).length;
-  document.getElementById("count").textContent = `${active} активных из ${tracks.length}`;
+  const active = tracks.filter((track) => track.active).length;
+  document.getElementById("count").textContent = t(`${active} активных из ${tracks.length}`, `${active} of ${tracks.length} active`);
   if (!tracks.length) {
-    box.innerHTML = `<p class="faint">Пока пусто. Загрузите первый трек.</p>`;
+    box.innerHTML = `<p class="faint">${t("Пока пусто. Загрузите первый трек.", "Nothing here yet. Upload the first track.")}</p>`;
     return;
   }
   box.innerHTML = `<div class="table-wrap"><table class="table">
-    <thead><tr><th>Трек</th><th>Формат</th><th>Отрывок</th><th>Угадали</th><th>Прослушать</th><th>Активен</th><th></th></tr></thead>
-    <tbody>${tracks.map((t) => `
-      <tr class="${t.active ? "" : "inactive"}" data-id="${t.id}">
-        <td><b>${esc(t.title)}</b><div class="faint" style="font-size:13px">${esc(t.artist) || "—"}</div></td>
-        <td class="mono" style="font-size:12.5px;white-space:nowrap">${t.bit_depth} bit / ${(t.sample_rate / 1000).toLocaleString("ru-RU")} kHz<div class="faint">${t.channels} ch · ${esc(t.source_codec)} · ${(t.file_size / 1048576).toFixed(1)} МБ</div></td>
-        <td class="mono" style="font-size:13px;white-space:nowrap">${fmtTime(t.start_seconds)}–${fmtTime(t.start_seconds + t.clip_seconds)}</td>
-        <td class="mono" style="font-size:13px">${t.times_played ? `${Math.round((t.times_correct / t.times_played) * 100)}% <span class="faint">(${t.times_correct}/${t.times_played})</span>` : `<span class="faint">—</span>`}</td>
+    <thead><tr><th>${t("Трек", "Track")}</th><th>${t("Формат", "Format")}</th><th>${t("Отрывок", "Clip")}</th><th>${t("Угадали", "Guessed")}</th><th>${t("Прослушать", "Listen")}</th><th>${t("Активен", "Active")}</th><th></th></tr></thead>
+    <tbody>${tracks.map((track) => `
+      <tr class="${track.active ? "" : "inactive"}" data-id="${track.id}">
+        <td><b>${esc(track.title)}</b><div class="faint" style="font-size:13px">${esc(track.artist) || "—"}</div></td>
+        <td class="mono" style="font-size:12.5px;white-space:nowrap">${track.bit_depth} bit / ${(track.sample_rate / 1000).toLocaleString(LOCALE)} kHz<div class="faint">${track.channels} ch · ${esc(track.source_codec)} · ${(track.file_size / 1048576).toFixed(1)} ${t("МБ", "MB")}</div></td>
+        <td class="mono" style="font-size:13px;white-space:nowrap">${fmtTime(track.start_seconds)}–${fmtTime(track.start_seconds + track.clip_seconds)}</td>
+        <td class="mono" style="font-size:13px">${track.times_played ? `${Math.round((track.times_correct / track.times_played) * 100)}% <span class="faint">(${track.times_correct}/${track.times_played})</span>` : `<span class="faint">—</span>`}</td>
         <td><div class="mini-play">
-          <button data-play="lossless">lossless</button><button data-play="aac">AAC</button>
+          <button data-play="lossless">lossless</button>${cfg.difficulties.map((l) =>
+            `<button data-play="${esc(l.name)}" title="${esc(levelTitle(l.name))}">${l.kbps}</button>`).join("")}
         </div></td>
-        <td><label class="switch"><input type="checkbox" data-act="toggle" ${t.active ? "checked" : ""}><span></span></label></td>
+        <td><label class="switch"><input type="checkbox" data-act="toggle" ${track.active ? "checked" : ""}><span></span></label></td>
         <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" data-act="edit">✎</button>
-          <button class="btn btn-danger btn-sm" data-act="delete">Удалить</button></td>
+          <button class="btn btn-danger btn-sm" data-act="delete">${t("Удалить", "Delete")}</button></td>
       </tr>`).join("")}</tbody></table></div>`;
 
-  const byId = Object.fromEntries(tracks.map((t) => [t.id, t]));
+  const byId = Object.fromEntries(tracks.map((track) => [track.id, track]));
   let playing = null;
   box.querySelectorAll("tr[data-id]").forEach((tr) => {
-    const t = byId[tr.dataset.id];
+    const track = byId[tr.dataset.id];
     tr.querySelectorAll("[data-play]").forEach((b) => (b.onclick = () => {
       box.querySelectorAll("[data-play]").forEach((x) => x.classList.remove("on"));
-      const key = `${t.id}/${b.dataset.play}`;
+      const key = `${track.id}/${b.dataset.play}`;
       if (playing === key && !previewAudio.paused) { previewAudio.pause(); playing = null; return; }
       // Switching sides of the same track keeps the position.
-      const pos = playing && playing.startsWith(`${t.id}/`) ? previewAudio.currentTime : 0;
-      previewAudio.src = `/api/admin/tracks/${t.id}/audio/${b.dataset.play}`;
+      const pos = playing && playing.startsWith(`${track.id}/`) ? previewAudio.currentTime : 0;
+      previewAudio.src = `/api/admin/tracks/${track.id}/audio/${b.dataset.play}`;
       previewAudio.addEventListener("loadedmetadata", () => (previewAudio.currentTime = pos), { once: true });
       previewAudio.play();
       playing = key;
@@ -260,25 +262,26 @@ async function loadTracks() {
     }));
     tr.querySelector('[data-act="toggle"]').onchange = async (e) => {
       try {
-        await api(`/api/admin/tracks/${t.id}`, { method: "PATCH", json: { artist: t.artist, title: t.title, active: e.target.checked } });
+        await api(`/api/admin/tracks/${track.id}`, { method: "PATCH", json: { artist: track.artist, title: track.title, active: e.target.checked } });
         loadTracks();
       } catch (err) { toast(err.message, true); e.target.checked = !e.target.checked; }
     };
     tr.querySelector('[data-act="edit"]').onclick = async () => {
-      const artist = prompt("Исполнитель", t.artist);
+      const artist = prompt(t("Исполнитель", "Artist"), track.artist);
       if (artist === null) return;
-      const title = prompt("Название", t.title);
+      const title = prompt(t("Название", "Title"), track.title);
       if (title === null || !title.trim()) return;
       try {
-        await api(`/api/admin/tracks/${t.id}`, { method: "PATCH", json: { artist, title, active: t.active } });
+        await api(`/api/admin/tracks/${track.id}`, { method: "PATCH", json: { artist, title, active: track.active } });
         loadTracks();
       } catch (err) { toast(err.message, true); }
     };
     tr.querySelector('[data-act="delete"]').onclick = async () => {
-      if (!confirm(`Удалить «${t.title}» вместе с файлами? Результаты прошлых тестов сохранятся.`)) return;
+      if (!confirm(t(`Удалить «${track.title}» вместе с файлами? Результаты прошлых тестов сохранятся.`,
+        `Delete “${track.title}” and its files? Past test results will be kept.`))) return;
       try {
-        await api(`/api/admin/tracks/${t.id}`, { method: "DELETE" });
-        toast("Трек удалён");
+        await api(`/api/admin/tracks/${track.id}`, { method: "DELETE" });
+        toast(t("Трек удалён", "Track deleted"));
         loadTracks();
       } catch (err) { toast(err.message, true); }
     };
@@ -302,13 +305,13 @@ async function loadUsers() {
   const avg = played.length ? played.reduce((s, u) => s + u.avg_percent, 0) / played.length : 0;
   sec.innerHTML = `
     <div class="grid grid-3">
-      <div class="card"><div class="eyebrow">Пользователей</div><div class="big-number" style="margin-top:8px">${users.length}</div></div>
-      <div class="card"><div class="eyebrow">Прошли тест</div><div class="big-number" style="margin-top:8px">${played.length}</div></div>
-      <div class="card"><div class="eyebrow">Средний результат</div><div class="big-number" style="margin-top:8px">${Math.round(avg)}%</div>
-        <div class="faint" style="font-size:13px;margin-top:6px">случайное угадывание — 25%</div></div>
+      <div class="card"><div class="eyebrow">${t("Пользователей", "Users")}</div><div class="big-number" style="margin-top:8px">${users.length}</div></div>
+      <div class="card"><div class="eyebrow">${t("Прошли тест", "Took the test")}</div><div class="big-number" style="margin-top:8px">${played.length}</div></div>
+      <div class="card"><div class="eyebrow">${t("Средний результат", "Average score")}</div><div class="big-number" style="margin-top:8px">${Math.round(avg)}%</div>
+        <div class="faint" style="font-size:13px;margin-top:6px">${t("случайное угадывание — 25%", "random guessing is 25%")}</div></div>
     </div>
     <div class="card" style="margin-top:20px"><div class="table-wrap"><table class="table">
-      <thead><tr><th>Пользователь</th><th>Попыток</th><th>Лучший</th><th>Средний</th><th>Последний тест</th><th>Регистрация</th></tr></thead>
+      <thead><tr><th>${t("Пользователь", "User")}</th><th>${t("Попыток", "Attempts")}</th><th>${t("Лучший", "Best")}</th><th>${t("Средний", "Average")}</th><th>${t("Последний тест", "Last test")}</th><th>${t("Регистрация", "Signed up")}</th></tr></thead>
       <tbody>${users.map((u) => `<tr>
         <td><div class="row" style="flex-wrap:nowrap">${u.picture ? `<img class="avatar" src="${esc(u.picture)}" alt="" referrerpolicy="no-referrer">` : ""}
           <div><b>${esc(u.name) || "—"}</b><div class="faint" style="font-size:13px">${esc(u.email)}</div></div></div></td>

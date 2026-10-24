@@ -11,6 +11,7 @@ type StatsFilter struct {
 	Days          int      // 0 = all time
 	ExcludeEmails []string // lower-cased emails whose attempts are skipped (admins)
 	TimeZone      string   // IANA name used to bucket attempts by day
+	Difficulty    string   // "" = all levels
 }
 
 type Stats struct {
@@ -19,6 +20,7 @@ type Stats struct {
 	Confusion   []ConfusionCell `json:"confusion"`
 	ByPosition  []AccuracyRow   `json:"by_position"`
 	ByAttemptNo []AccuracyRow   `json:"by_attempt_no"`
+	ByLevel     []LevelAccuracy `json:"by_difficulty"`
 	ByTrack     []TrackAccuracy `json:"by_track"`
 	Daily       []DailyRow      `json:"daily"`
 }
@@ -51,6 +53,13 @@ type AccuracyRow struct {
 	Correct  int `json:"correct"`
 }
 
+type LevelAccuracy struct {
+	Difficulty string `json:"difficulty"`
+	Attempts   int    `json:"attempts"`
+	Answered   int    `json:"answered"`
+	Correct    int    `json:"correct"`
+}
+
 type TrackAccuracy struct {
 	TrackID    *int64 `json:"track_id"` // nil when the track was deleted
 	Artist     string `json:"artist"`
@@ -76,15 +85,16 @@ func (s *Store) Stats(ctx context.Context, f StatsFilter) (*Stats, error) {
 	if f.ExcludeEmails == nil {
 		f.ExcludeEmails = []string{}
 	}
-	// $1 = days, $2 = excluded emails; every query starts from this set.
+	// $1 = days, $2 = excluded emails, $3 = difficulty; every query starts from this set.
 	const scope = `
 		WITH a AS (
 			SELECT a.* FROM attempts a JOIN users u ON u.id = a.user_id
 			WHERE a.finished_at IS NOT NULL
 				AND ($1::int = 0 OR a.finished_at >= now() - make_interval(days => $1::int))
 				AND NOT lower(u.email) = ANY($2::text[])
+				AND ($3::text = '' OR a.difficulty = $3::text)
 		) `
-	args := []any{f.Days, f.ExcludeEmails}
+	args := []any{f.Days, f.ExcludeEmails, f.Difficulty}
 	st := &Stats{}
 
 	err := s.db.QueryRow(ctx, scope+`
@@ -93,7 +103,8 @@ func (s *Store) Stats(ctx context.Context, f StatsFilter) (*Stats, error) {
 			(SELECT count(*)::int FROM attempts x JOIN users u ON u.id = x.user_id
 				WHERE x.finished_at IS NULL
 					AND ($1::int = 0 OR x.started_at >= now() - make_interval(days => $1::int))
-					AND NOT lower(u.email) = ANY($2::text[]))
+					AND NOT lower(u.email) = ANY($2::text[])
+					AND ($3::text = '' OR x.difficulty = $3::text))
 		FROM a`, args...).Scan(&st.Summary.Attempts, &st.Summary.Players,
 		&st.Summary.Questions, &st.Summary.Correct, &st.Summary.Unfinished)
 	if err != nil {
@@ -134,7 +145,7 @@ func (s *Store) Stats(ctx context.Context, f StatsFilter) (*Stats, error) {
 	// date filter doesn't renumber it.
 	rows, err = s.db.Query(ctx, scope+`
 		, n AS (
-			SELECT id, least(row_number() OVER (PARTITION BY user_id ORDER BY started_at), $3::int)::int AS n
+			SELECT id, least(row_number() OVER (PARTITION BY user_id ORDER BY started_at), $4::int)::int AS n
 			FROM attempts WHERE finished_at IS NOT NULL
 		)
 		SELECT n.n, sum(a.total)::int, sum(a.score)::int
@@ -143,6 +154,15 @@ func (s *Store) Stats(ctx context.Context, f StatsFilter) (*Stats, error) {
 		return nil, err
 	}
 	if st.ByAttemptNo, err = pgx.CollectRows(rows, pgx.RowToStructByPos[AccuracyRow]); err != nil {
+		return nil, err
+	}
+
+	rows, err = s.db.Query(ctx, scope+`
+		SELECT difficulty, count(*)::int, sum(total)::int, sum(score)::int FROM a GROUP BY 1`, args...)
+	if err != nil {
+		return nil, err
+	}
+	if st.ByLevel, err = pgx.CollectRows(rows, pgx.RowToStructByPos[LevelAccuracy]); err != nil {
 		return nil, err
 	}
 
@@ -161,7 +181,7 @@ func (s *Store) Stats(ctx context.Context, f StatsFilter) (*Stats, error) {
 	}
 
 	rows, err = s.db.Query(ctx, scope+`
-		SELECT to_char(finished_at AT TIME ZONE $3, 'YYYY-MM-DD'), count(*)::int, sum(total)::int, sum(score)::int
+		SELECT to_char(finished_at AT TIME ZONE $4, 'YYYY-MM-DD'), count(*)::int, sum(total)::int, sum(score)::int
 		FROM a GROUP BY 1 ORDER BY 1`, append(args, f.TimeZone)...)
 	if err != nil {
 		return nil, err

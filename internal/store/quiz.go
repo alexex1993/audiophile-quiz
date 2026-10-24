@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,15 +23,50 @@ const (
 	AnswerBothLossless   = 3
 	AnswerBothCompressed = 4
 
-	quotaWindow = 7 * 24 * time.Hour // keep in sync with "interval '7 days'" in the queries
+	quotaWindow = 24 * time.Hour
 )
 
 var (
-	ErrLimitReached  = errors.New("weekly attempt limit reached")
+	ErrLimitReached  = errors.New("daily attempt limit reached")
 	ErrNoTracks      = errors.New("track library is empty")
 	ErrAttemptClosed = errors.New("attempt is already finished")
 	ErrNotAllAnswers = errors.New("not every question is answered")
 )
+
+// Difficulty is a quiz level: the AAC bitrate the compressed clips went
+// through (the lower it is, the easier the artefacts are to hear) and how
+// many tracks an attempt has; fewer if the library is smaller.
+type Difficulty struct {
+	Name      string `json:"name"`
+	Kbps      int    `json:"kbps"`
+	Questions int    `json:"questions"`
+}
+
+// Bitrate is the ffmpeg -b:a value, e.g. "128k"; also part of the clip file name.
+func (d Difficulty) Bitrate() string { return strconv.Itoa(d.Kbps) + "k" }
+
+// Difficulties, easiest first. Names must match the CHECK on attempts.difficulty.
+var Difficulties = []Difficulty{{"easy", 32, 5}, {"medium", 128, 12}, {"hard", 320, 12}}
+
+const DefaultDifficulty = "medium"
+
+func DifficultyByName(name string) (Difficulty, bool) {
+	for _, d := range Difficulties {
+		if d.Name == name {
+			return d, true
+		}
+	}
+	return Difficulty{}, false
+}
+
+// Bitrates lists the bitrate of every difficulty, the clips each track needs.
+func Bitrates() []string {
+	out := make([]string, len(Difficulties))
+	for i, d := range Difficulties {
+		out[i] = d.Bitrate()
+	}
+	return out
+}
 
 // answerKinds maps each answer option to the pair of files it describes.
 var answerKinds = map[int][2]string{
@@ -46,6 +83,7 @@ type Attempt struct {
 	FinishedAt *time.Time  `json:"finished_at"`
 	Score      *int        `json:"score"`
 	Total      int         `json:"total"`
+	Difficulty string      `json:"difficulty"`
 	Questions  []*Question `json:"questions,omitempty"`
 }
 
@@ -62,44 +100,58 @@ type Question struct {
 	KindB         string     `json:"kind_b,omitempty"`
 }
 
+// Quota is what the user may know about their attempt limit. The limit
+// itself is hidden from players: they only learn that it is exhausted.
 type Quota struct {
-	Limit      int        `json:"limit"`
-	Unlimited  bool       `json:"unlimited"` // limit <= 0, e.g. for admins
-	Used       int        `json:"used"`
-	Left       int        `json:"left"`
-	NextSlot   *time.Time `json:"next_slot"` // when the oldest attempt in the window stops counting
+	Unlimited  bool       `json:"unlimited"`           // limit <= 0, e.g. for admins
+	Used       *int       `json:"used,omitempty"`      // attempts in the window; unlimited users only
+	Exhausted  bool       `json:"exhausted"`           // no new attempt can be started now
+	NextSlot   *time.Time `json:"next_slot,omitempty"` // when exhausted: when the next attempt frees up
 	Unfinished *int64     `json:"unfinished_attempt_id"`
+	// UnfinishedDifficulty is the level of the unfinished attempt, if any.
+	UnfinishedDifficulty *string `json:"unfinished_difficulty"`
 }
 
 func (s *Store) Quota(ctx context.Context, userID int64, limit int) (*Quota, error) {
-	q := &Quota{Limit: limit, Unlimited: limit <= 0}
-	var oldest *time.Time
-	err := s.db.QueryRow(ctx, `
-		SELECT count(*)::int, min(started_at) FROM attempts
-		WHERE user_id = $1 AND started_at > now() - interval '7 days'`,
-		userID).Scan(&q.Used, &oldest)
+	q := &Quota{Unlimited: limit <= 0}
+	rows, err := s.db.Query(ctx, `
+		SELECT started_at FROM attempts WHERE user_id = $1 AND started_at > now() - $2::interval
+		ORDER BY started_at`, userID, quotaWindow)
 	if err != nil {
 		return nil, err
 	}
-	q.Left = max(limit-q.Used, 0)
-	if oldest != nil {
-		t := oldest.Add(quotaWindow)
-		q.NextSlot = &t
+	started, err := pgx.CollectRows(rows, pgx.RowTo[time.Time])
+	if err != nil {
+		return nil, err
+	}
+	if q.Unlimited {
+		q.Used = new(int)
+		*q.Used = len(started)
+	} else if used := len(started); used >= limit {
+		// A slot frees up once enough of the oldest attempts leave the window.
+		t := started[used-limit].Add(quotaWindow)
+		q.Exhausted, q.NextSlot = true, &t
 	}
 	var id int64
-	err = s.db.QueryRow(ctx, `SELECT id FROM attempts WHERE user_id = $1 AND finished_at IS NULL ORDER BY id DESC LIMIT 1`,
-		userID).Scan(&id)
+	var difficulty string
+	err = s.db.QueryRow(ctx, `SELECT id, difficulty FROM attempts WHERE user_id = $1 AND finished_at IS NULL ORDER BY id DESC LIMIT 1`,
+		userID).Scan(&id, &difficulty)
 	if err == nil {
-		q.Unfinished = &id
+		q.Unfinished, q.UnfinishedDifficulty = &id, &difficulty
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
 	return q, nil
 }
 
-// StartAttempt resumes the user's unfinished attempt or, if the weekly quota
-// allows, creates a new one with up to n random active tracks. limit <= 0 means unlimited.
-func (s *Store) StartAttempt(ctx context.Context, userID int64, limit, n int) (int64, error) {
+// StartAttempt resumes the user's unfinished attempt (whatever its difficulty)
+// or, if the daily quota allows, creates a new one at difficulty with up to n
+// random active tracks. limit <= 0 means unlimited. The quota is shared by all levels.
+func (s *Store) StartAttempt(ctx context.Context, userID int64, limit int, difficulty string) (int64, error) {
+	level, ok := DifficultyByName(difficulty)
+	if !ok {
+		return 0, fmt.Errorf("unknown difficulty %q", difficulty)
+	}
 	var attemptID int64
 	err := pgx.BeginFunc(ctx, s.db, func(tx pgx.Tx) error {
 		// Serialises concurrent starts by the same user so the quota can't be exceeded.
@@ -115,15 +167,15 @@ func (s *Store) StartAttempt(ctx context.Context, userID int64, limit, n int) (i
 		}
 
 		var used int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM attempts WHERE user_id = $1 AND started_at > now() - interval '7 days'`,
-			userID).Scan(&used); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM attempts WHERE user_id = $1 AND started_at > now() - $2::interval`,
+			userID, quotaWindow).Scan(&used); err != nil {
 			return err
 		}
 		if limit > 0 && used >= limit {
 			return ErrLimitReached
 		}
 
-		rows, err := tx.Query(ctx, `SELECT id, artist, title FROM tracks WHERE active ORDER BY random() LIMIT $1`, n)
+		rows, err := tx.Query(ctx, `SELECT id, artist, title FROM tracks WHERE active ORDER BY random() LIMIT $1`, level.Questions)
 		if err != nil {
 			return err
 		}
@@ -142,8 +194,8 @@ func (s *Store) StartAttempt(ctx context.Context, userID int64, limit, n int) (i
 			return ErrNoTracks
 		}
 
-		if err := tx.QueryRow(ctx, `INSERT INTO attempts (user_id, total) VALUES ($1, $2) RETURNING id`,
-			userID, len(picks)).Scan(&attemptID); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO attempts (user_id, total, difficulty) VALUES ($1, $2, $3) RETURNING id`,
+			userID, len(picks), difficulty).Scan(&attemptID); err != nil {
 			return err
 		}
 		for i, p := range picks {
@@ -167,8 +219,8 @@ func (s *Store) StartAttempt(ctx context.Context, userID int64, limit, n int) (i
 // only when the attempt is finished.
 func (s *Store) GetAttempt(ctx context.Context, attemptID, userID int64) (*Attempt, error) {
 	a := &Attempt{}
-	err := s.db.QueryRow(ctx, `SELECT id, user_id, started_at, finished_at, score, total FROM attempts WHERE id = $1 AND user_id = $2`,
-		attemptID, userID).Scan(&a.ID, &a.UserID, &a.StartedAt, &a.FinishedAt, &a.Score, &a.Total)
+	err := s.db.QueryRow(ctx, `SELECT id, user_id, started_at, finished_at, score, total, difficulty FROM attempts WHERE id = $1 AND user_id = $2`,
+		attemptID, userID).Scan(&a.ID, &a.UserID, &a.StartedAt, &a.FinishedAt, &a.Score, &a.Total, &a.Difficulty)
 	if err != nil {
 		return nil, notFound(err)
 	}
@@ -241,20 +293,21 @@ func (s *Store) FinishAttempt(ctx context.Context, attemptID, userID int64) erro
 
 func (s *Store) ListAttempts(ctx context.Context, userID int64) ([]*Attempt, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, user_id, started_at, finished_at, score, total FROM attempts
+		SELECT id, user_id, started_at, finished_at, score, total, difficulty FROM attempts
 		WHERE user_id = $1 AND finished_at IS NOT NULL ORDER BY started_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*Attempt, error) {
 		a := &Attempt{}
-		return a, r.Scan(&a.ID, &a.UserID, &a.StartedAt, &a.FinishedAt, &a.Score, &a.Total)
+		return a, r.Scan(&a.ID, &a.UserID, &a.StartedAt, &a.FinishedAt, &a.Score, &a.Total, &a.Difficulty)
 	})
 }
 
 type AudioRef struct {
 	StorageDir string
 	Kind       string
+	Difficulty string
 	FileSize   int64
 }
 
@@ -262,12 +315,12 @@ type AudioRef struct {
 func (s *Store) AudioByToken(ctx context.Context, token string, userID int64) (*AudioRef, error) {
 	ref := &AudioRef{}
 	err := s.db.QueryRow(ctx, `
-		SELECT t.storage_dir, CASE WHEN q.token_a = $1 THEN q.kind_a ELSE q.kind_b END, t.file_size
+		SELECT t.storage_dir, CASE WHEN q.token_a = $1 THEN q.kind_a ELSE q.kind_b END, a.difficulty, t.file_size
 		FROM attempt_questions q
 		JOIN attempts a ON a.id = q.attempt_id
 		JOIN tracks t ON t.id = q.track_id
 		WHERE (q.token_a = $1 OR q.token_b = $1) AND a.user_id = $2`, token, userID,
-	).Scan(&ref.StorageDir, &ref.Kind, &ref.FileSize)
+	).Scan(&ref.StorageDir, &ref.Kind, &ref.Difficulty, &ref.FileSize)
 	return ref, notFound(err)
 }
 

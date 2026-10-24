@@ -49,7 +49,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	s.setCookie(w, verifierCookie, "", -1)
 	if err1 != nil || err2 != nil ||
 		subtle.ConstantTimeCompare([]byte(stateC.Value), []byte(r.URL.Query().Get("state"))) != 1 {
-		http.Error(w, "Сессия входа устарела, попробуйте ещё раз.", http.StatusBadRequest)
+		http.Error(w, tr(r, "Сессия входа устарела, попробуйте ещё раз.", "The sign-in session expired, please try again."), http.StatusBadRequest)
 		return
 	}
 	if e := r.URL.Query().Get("error"); e != "" {
@@ -62,30 +62,30 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	tok, err := s.oauth.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(verifierC.Value))
 	if err != nil {
 		slog.Warn("oauth exchange", "err", err)
-		http.Error(w, "Не удалось войти через Google.", http.StatusBadGateway)
+		http.Error(w, tr(r, "Не удалось войти через Google.", "Google sign-in failed."), http.StatusBadGateway)
 		return
 	}
 	info, err := s.fetchUserInfo(ctx, tok)
 	if err != nil {
 		slog.Warn("oauth userinfo", "err", err)
-		http.Error(w, "Не удалось получить профиль Google.", http.StatusBadGateway)
+		http.Error(w, tr(r, "Не удалось получить профиль Google.", "Could not fetch the Google profile."), http.StatusBadGateway)
 		return
 	}
 	if !info.EmailVerified {
-		http.Error(w, "Email Google-аккаунта не подтверждён.", http.StatusForbidden)
+		http.Error(w, tr(r, "Email Google-аккаунта не подтверждён.", "The Google account email is not verified."), http.StatusForbidden)
 		return
 	}
 
 	user, err := s.store.UpsertGoogleUser(ctx, info.Sub, info.Email, info.Name, info.Picture)
 	if err != nil {
 		slog.Error("upsert user", "err", err)
-		http.Error(w, "Внутренняя ошибка.", http.StatusInternalServerError)
+		http.Error(w, tr(r, "Внутренняя ошибка.", "Internal error."), http.StatusInternalServerError)
 		return
 	}
 	token := randomString()
 	if err := s.store.CreateSession(ctx, hashToken(token), user.ID, time.Now().Add(sessionTTL)); err != nil {
 		slog.Error("create session", "err", err)
-		http.Error(w, "Внутренняя ошибка.", http.StatusInternalServerError)
+		http.Error(w, tr(r, "Внутренняя ошибка.", "Internal error."), http.StatusInternalServerError)
 		return
 	}
 	s.setCookie(w, sessionCookie, token, sessionTTL)
@@ -133,15 +133,15 @@ func (s *Server) requireUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, "требуется вход через Google")
+			writeError(w, http.StatusUnauthorized, tr(r, "требуется вход через Google", "sign in with Google required"))
 			return
 		}
 		user, err := s.store.SessionUser(r.Context(), hashToken(c.Value))
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusUnauthorized, "требуется вход через Google")
+			writeError(w, http.StatusUnauthorized, tr(r, "требуется вход через Google", "sign in with Google required"))
 			return
 		} else if err != nil {
-			writeStoreError(w, err)
+			writeStoreError(w, r, err)
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, user)))
@@ -151,7 +151,7 @@ func (s *Server) requireUser(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return s.requireUser(func(w http.ResponseWriter, r *http.Request) {
 		if !s.cfg.IsAdmin(currentUser(r).Email) {
-			writeError(w, http.StatusForbidden, "доступ только для администраторов")
+			writeError(w, http.StatusForbidden, tr(r, "доступ только для администраторов", "admins only"))
 			return
 		}
 		next(w, r)

@@ -22,7 +22,7 @@ import (
 func (s *Server) handleListTracks(w http.ResponseWriter, r *http.Request) {
 	tracks, err := s.store.ListTracks(r.Context())
 	if err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	if tracks == nil {
@@ -32,23 +32,24 @@ func (s *Server) handleListTracks(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUploadTrack accepts a multipart form (file, artist, title, start),
-// produces both clips and deletes the uploaded source.
+// produces the lossless clip plus one AAC clip per difficulty and deletes the
+// uploaded source.
 func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadMB<<20)
 	mr, err := r.MultipartReader()
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "ожидается multipart/form-data")
+		writeError(w, http.StatusBadRequest, tr(r, "ожидается multipart/form-data", "multipart/form-data expected"))
 		return
 	}
 
 	tmpDir := filepath.Join(s.cfg.DataDir, "tmp")
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	fields := map[string]string{}
 	var srcPath, srcName string
-	// The source is only needed until both clips exist.
+	// The source is only needed until the clips exist.
 	defer func() {
 		if srcPath != "" {
 			os.Remove(srcPath)
@@ -61,7 +62,7 @@ func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "ошибка загрузки: "+err.Error())
+			writeError(w, http.StatusBadRequest, tr(r, "ошибка загрузки: ", "upload failed: ")+err.Error())
 			return
 		}
 		if part.FileName() == "" {
@@ -75,20 +76,20 @@ func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 		srcName = filepath.Base(part.FileName())
 		f, err := os.CreateTemp(tmpDir, "upload-*"+strings.ToLower(filepath.Ext(srcName)))
 		if err != nil {
-			writeStoreError(w, err)
+			writeStoreError(w, r, err)
 			return
 		}
 		srcPath = f.Name()
 		_, err = io.Copy(f, part)
 		f.Close()
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "ошибка загрузки файла: "+err.Error())
+			writeError(w, http.StatusBadRequest, tr(r, "ошибка загрузки файла: ", "file upload failed: ")+err.Error())
 			return
 		}
 	}
 
 	if srcPath == "" {
-		writeError(w, http.StatusBadRequest, "файл не передан")
+		writeError(w, http.StatusBadRequest, tr(r, "файл не передан", "no file uploaded"))
 		return
 	}
 	title := fields["title"]
@@ -97,7 +98,7 @@ func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 	}
 	start, err := parseTimestamp(fields["start"])
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, tr(r, "неверный формат начала отрывка: ", "invalid clip start: ")+strconv.Quote(fields["start"]))
 		return
 	}
 
@@ -105,11 +106,16 @@ func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 	outDir := filepath.Join(s.cfg.DataDir, storageDir)
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	res, err := audio.Process(ctx, srcPath, outDir, start, s.cfg.ClipSeconds, s.cfg.AACBitrate)
+	res, err := audio.Process(ctx, srcPath, outDir, start, s.cfg.ClipSeconds, store.Bitrates())
 	if err != nil {
 		os.RemoveAll(outDir)
 		slog.Warn("process upload", "file", srcName, "err", err)
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		msg := tr(r, "ошибка обработки: ", "processing failed: ") + err.Error()
+		var ue *audio.UserError
+		if errors.As(err, &ue) {
+			msg = tr(r, ue.RU, ue.EN)
+		}
+		writeError(w, http.StatusUnprocessableEntity, msg)
 		return
 	}
 
@@ -123,14 +129,14 @@ func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 		SampleRate:     res.Info.SampleRate,
 		Channels:       res.Info.Channels,
 		BitDepth:       res.Info.BitDepth,
-		PCMCodec:       res.PCMCodec,
-		AACBitrate:     s.cfg.AACBitrate,
+		PCMCodec:       "flac",
+		AACBitrate:     clipBitrates(),
 		StorageDir:     storageDir,
 		FileSize:       res.FileSize,
 	}
 	if err := s.store.CreateTrack(r.Context(), t); err != nil {
 		os.RemoveAll(outDir)
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	slog.Info("track added", "id", t.ID, "title", t.Title, "rate", t.SampleRate, "bits", t.BitDepth)
@@ -145,11 +151,11 @@ func (s *Server) handleUpdateTrack(w http.ResponseWriter, r *http.Request) {
 		Active bool   `json:"active"`
 	}
 	if !ok || readJSON(r, &req) != nil || strings.TrimSpace(req.Title) == "" {
-		writeError(w, http.StatusBadRequest, "неверный запрос")
+		writeError(w, http.StatusBadRequest, tr(r, "неверный запрос", "bad request"))
 		return
 	}
 	if err := s.store.UpdateTrack(r.Context(), id, strings.TrimSpace(req.Artist), strings.TrimSpace(req.Title), req.Active); err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -160,16 +166,16 @@ func (s *Server) handleUpdateTrack(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeleteTrack(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "неверный id")
+		writeError(w, http.StatusBadRequest, tr(r, "неверный id", "invalid id"))
 		return
 	}
 	t, err := s.store.GetTrack(r.Context(), id)
 	if err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	if err := s.store.DeleteTrack(r.Context(), id); err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	if err := os.RemoveAll(filepath.Join(s.cfg.DataDir, t.StorageDir)); err != nil {
@@ -178,25 +184,33 @@ func (s *Server) handleDeleteTrack(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleAdminAudio serves a track's clip for preview; kind is "lossless" or a
+// difficulty name for the AAC clip of that level.
 func (s *Server) handleAdminAudio(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	kind := r.PathValue("kind")
-	if !ok || (kind != store.KindLossless && kind != store.KindAAC) {
-		writeError(w, http.StatusBadRequest, "неверный запрос")
+	name := audio.LosslessFile
+	if d, isLevel := store.DifficultyByName(kind); isLevel {
+		name = audio.EncodedFile(d.Bitrate())
+	} else if kind != store.KindLossless {
+		ok = false
+	}
+	if !ok {
+		writeError(w, http.StatusBadRequest, tr(r, "неверный запрос", "bad request"))
 		return
 	}
 	t, err := s.store.GetTrack(r.Context(), id)
 	if err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
-	s.serveClip(w, r, t.StorageDir, kind)
+	s.serveClip(w, r, t.StorageDir, name)
 }
 
 func (s *Server) handleUserStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := s.store.UserStats(r.Context())
 	if err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	if stats == nil {
@@ -206,12 +220,16 @@ func (s *Server) handleUserStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStats serves the statistics tab. Query: days (0 = all time),
-// admins=0 to skip admins' attempts, tz (IANA name) for daily buckets.
+// admins=0 to skip admins' attempts, tz (IANA name) for daily buckets,
+// difficulty (a level name; empty = all levels).
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.StatsFilter{TimeZone: "UTC"}
 	if d, err := strconv.Atoi(q.Get("days")); err == nil && d > 0 && d <= 3650 {
 		f.Days = d
+	}
+	if _, ok := store.DifficultyByName(q.Get("difficulty")); ok {
+		f.Difficulty = q.Get("difficulty")
 	}
 	if q.Get("admins") == "0" {
 		for email := range s.cfg.AdminEmails {
@@ -226,7 +244,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	st, err := s.store.Stats(r.Context(), f)
 	if err != nil {
-		writeStoreError(w, err)
+		writeStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -241,12 +259,12 @@ func parseTimestamp(v string) (float64, error) {
 	var total float64
 	parts := strings.Split(v, ":")
 	if len(parts) > 3 {
-		return 0, errors.New("неверный формат начала отрывка")
+		return 0, errors.New("too many colons")
 	}
 	for _, p := range parts {
 		n, err := strconv.ParseFloat(p, 64)
 		if err != nil || n < 0 {
-			return 0, fmt.Errorf("неверный формат начала отрывка: %q", v)
+			return 0, fmt.Errorf("bad number %q", p)
 		}
 		total = total*60 + n
 	}
@@ -259,4 +277,36 @@ func randomHex() string {
 		panic(err)
 	}
 	return hex.EncodeToString(b)
+}
+
+// clipBitrates is the aac_bitrate of a track whose clips match store.Difficulties.
+func clipBitrates() string { return strings.Join(store.Bitrates(), "/") }
+
+// SyncClips re-encodes the clips of every track made for other bitrates than
+// store.Difficulties now has, from the track's own lossless clip. Called at
+// startup, before anything is served. A track that fails is logged and left as is.
+func (s *Server) SyncClips(ctx context.Context) error {
+	tracks, err := s.store.ListTracks(ctx)
+	if err != nil {
+		return err
+	}
+	want := clipBitrates()
+	for _, t := range tracks {
+		if t.AACBitrate == want {
+			continue
+		}
+		size, err := audio.Reencode(ctx, filepath.Join(s.cfg.DataDir, t.StorageDir), store.Bitrates())
+		if err == nil {
+			err = s.store.UpdateTrackClips(ctx, t.ID, want, size)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			slog.Warn("re-encode track", "id", t.ID, "title", t.Title, "from", t.AACBitrate, "err", err)
+			continue
+		}
+		slog.Info("track re-encoded", "id", t.ID, "title", t.Title, "from", t.AACBitrate, "to", want)
+	}
+	return nil
 }
