@@ -91,8 +91,8 @@ type Question struct {
 	Position      int        `json:"position"`
 	TrackArtist   string     `json:"artist"`
 	TrackTitle    string     `json:"title"`
-	TokenA        string     `json:"token_a"`
-	TokenB        string     `json:"token_b"`
+	TokenA        string     `json:"token_a,omitempty"`
+	TokenB        string     `json:"token_b,omitempty"`
 	UserAnswer    *int       `json:"user_answer"`
 	AnsweredAt    *time.Time `json:"-"`
 	CorrectAnswer int        `json:"correct_answer,omitempty"` // only exposed once the attempt is finished
@@ -302,6 +302,38 @@ func (s *Store) ListAttempts(ctx context.Context, userID int64) ([]*Attempt, err
 		a := &Attempt{}
 		return a, r.Scan(&a.ID, &a.UserID, &a.StartedAt, &a.FinishedAt, &a.Score, &a.Total, &a.Difficulty)
 	})
+}
+
+// UserAttempts lists a user's finished attempts, newest first, each with its
+// questions and correct answers, for the admin panel. Audio tokens are left
+// out: they only play for the attempt's owner.
+func (s *Store) UserAttempts(ctx context.Context, userID int64) ([]*Attempt, error) {
+	attempts, err := s.ListAttempts(ctx, userID)
+	if err != nil || len(attempts) == 0 {
+		return attempts, err
+	}
+	byID := make(map[int64]*Attempt, len(attempts))
+	for _, a := range attempts {
+		byID[a.ID] = a
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT q.attempt_id, q.position, q.track_artist, q.track_title, q.user_answer, q.answered_at, q.correct_answer, q.kind_a, q.kind_b
+		FROM attempt_questions q JOIN attempts a ON a.id = q.attempt_id
+		WHERE a.user_id = $1 AND a.finished_at IS NOT NULL ORDER BY q.attempt_id, q.position`, userID)
+	if err != nil {
+		return nil, err
+	}
+	var attemptID int64
+	q := &Question{}
+	_, err = pgx.ForEachRow(rows, []any{&attemptID, &q.Position, &q.TrackArtist, &q.TrackTitle, &q.UserAnswer, &q.AnsweredAt,
+		&q.CorrectAnswer, &q.KindA, &q.KindB}, func() error {
+		if a := byID[attemptID]; a != nil {
+			c := *q
+			a.Questions = append(a.Questions, &c)
+		}
+		return nil
+	})
+	return attempts, err
 }
 
 type AudioRef struct {

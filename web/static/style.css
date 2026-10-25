@@ -302,6 +302,13 @@ table.table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table td { padding: 12px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .table tr:last-child td { border-bottom: 0; }
 .table tr.inactive td { opacity: .5; }
+.table tr.user-row { cursor: pointer; }
+.table tr.user-row:hover td, .table tr.user-row.open td { background: rgba(125,175,255,.06); }
+.table tr.user-detail > td { padding: 4px 16px 16px; background: rgba(125,175,255,.03); }
+details.attempt { border-bottom: 1px solid var(--line); }
+details.attempt:last-child { border-bottom: 0; }
+details.attempt summary { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 0; cursor: pointer; }
+details.attempt .result-list li { grid-template-columns: 34px 1fr; padding: 10px 0; }
 .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex: none; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch span { position: absolute; inset: 0; border-radius: 99px; background: rgba(125,175,255,.2); cursor: pointer; transition: background .2s; }

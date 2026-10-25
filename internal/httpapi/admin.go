@@ -219,6 +219,24 @@ func (s *Server) handleUserStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// handleUserAttempts lists a user's finished attempts with every answer.
+func (s *Server) handleUserAttempts(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, tr(r, "неверный id", "invalid id"))
+		return
+	}
+	attempts, err := s.store.UserAttempts(r.Context(), id)
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	if attempts == nil {
+		attempts = []*store.Attempt{}
+	}
+	writeJSON(w, http.StatusOK, attempts)
+}
+
 // handleStats serves the statistics tab. Query: days (0 = all time),
 // admins=0 to skip admins' attempts, tz (IANA name) for daily buckets,
 // difficulty (a level name; empty = all levels).

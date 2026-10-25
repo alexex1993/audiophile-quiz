@@ -312,7 +312,7 @@ async function loadUsers() {
     </div>
     <div class="card" style="margin-top:20px"><div class="table-wrap"><table class="table">
       <thead><tr><th>${t("Пользователь", "User")}</th><th>${t("Попыток", "Attempts")}</th><th>${t("Лучший", "Best")}</th><th>${t("Средний", "Average")}</th><th>${t("Последний тест", "Last test")}</th><th>${t("Регистрация", "Signed up")}</th></tr></thead>
-      <tbody>${users.map((u) => `<tr>
+      <tbody>${users.map((u) => `<tr class="${u.attempts ? "user-row" : ""}" data-id="${u.id}">
         <td><div class="row" style="flex-wrap:nowrap">${u.picture ? `<img class="avatar" src="${esc(u.picture)}" alt="" referrerpolicy="no-referrer">` : ""}
           <div><b>${esc(u.name) || "—"}</b><div class="faint" style="font-size:13px">${esc(u.email)}</div></div></div></td>
         <td class="mono">${u.attempts}</td>
@@ -321,4 +321,58 @@ async function loadUsers() {
         <td>${u.last_played ? fmtDate(u.last_played) : '<span class="faint">—</span>'}</td>
         <td class="faint">${fmtDate(u.created_at, false)}</td>
       </tr>`).join("")}</tbody></table></div></div>`;
+
+  // Clicking a user who has played opens their attempts under the row.
+  sec.querySelectorAll("tr.user-row").forEach((tr) => (tr.onclick = () => {
+    const open = tr.nextElementSibling?.classList.contains("user-detail");
+    if (open) { tr.nextElementSibling.remove(); tr.classList.remove("open"); return; }
+    tr.classList.add("open");
+    const detail = document.createElement("tr");
+    detail.className = "user-detail";
+    detail.innerHTML = `<td colspan="6"><div class="spinner" style="margin:16px auto"></div></td>`;
+    tr.after(detail);
+    loadUserAttempts(tr.dataset.id, detail.firstElementChild);
+  }));
+}
+
+// Short labels for the four answers (see answerKinds in store/quiz.go).
+const ANSWER_SHORT = {
+  1: t("1-й lossless", "1st lossless"),
+  2: t("2-й lossless", "2nd lossless"),
+  3: t("оба lossless", "both lossless"),
+  4: t("оба AAC", "both AAC"),
+};
+
+async function loadUserAttempts(userID, cell) {
+  let attempts;
+  try {
+    attempts = await api(`/api/admin/users/${userID}/attempts`);
+  } catch (e) {
+    cell.innerHTML = `<div class="notice error">${esc(e.message)}</div>`;
+    return;
+  }
+  if (!attempts.length) {
+    cell.innerHTML = `<p class="faint">${t("Завершённых попыток нет.", "No finished attempts.")}</p>`;
+    return;
+  }
+  cell.innerHTML = attempts.map((a, i) => `
+    <details class="attempt"${i === 0 ? " open" : ""}>
+      <summary>
+        <span>${fmtDate(a.finished_at)}</span>
+        <span class="pill level-pill level-${esc(a.difficulty)}">${esc(levelTitle(a.difficulty))} · ${levelKbps(cfg.difficulties, a.difficulty)} kbps</span>
+        <b class="mono">${a.score}/${a.total}</b>
+        <span class="faint mono">${Math.round((a.score / a.total) * 100)}%</span>
+      </summary>
+      <ul class="result-list">${(a.questions || []).map((q) => {
+        const ok = q.user_answer === q.correct_answer;
+        return `<li>
+          <span class="mark ${ok ? "ok" : "bad"}">${ok ? "✓" : "✕"}</span>
+          <div>
+            <div><b>${esc(q.title)}</b>${q.artist ? ` <span class="faint">— ${esc(q.artist)}</span>` : ""}</div>
+            <div class="answers">${t("Ответ", "Answer")}: ${esc(ANSWER_SHORT[q.user_answer] || "—")}
+              ${ok ? "" : ` · <span style="color:var(--ok)">${t("верно", "correct")}: ${esc(ANSWER_SHORT[q.correct_answer])}</span>`}</div>
+          </div>
+        </li>`;
+      }).join("")}</ul>
+    </details>`).join("");
 }

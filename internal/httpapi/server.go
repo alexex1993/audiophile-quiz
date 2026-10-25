@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/tracks/{id}", s.requireAdmin(s.handleDeleteTrack))
 	mux.HandleFunc("GET /api/admin/tracks/{id}/audio/{kind}", s.requireAdmin(s.handleAdminAudio))
 	mux.HandleFunc("GET /api/admin/users", s.requireAdmin(s.handleUserStats))
+	mux.HandleFunc("GET /api/admin/users/{id}/attempts", s.requireAdmin(s.handleUserAttempts))
 	mux.HandleFunc("GET /api/admin/stats", s.requireAdmin(s.handleStats))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
