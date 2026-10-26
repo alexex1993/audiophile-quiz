@@ -82,6 +82,12 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, tr(r, "Внутренняя ошибка.", "Internal error."), http.StatusInternalServerError)
 		return
 	}
+	// A guest signing in keeps their finished warm-up attempts.
+	if guest, err := s.sessionUser(r); err == nil && guest.Guest {
+		if err := s.store.MergeGuest(ctx, guest.ID, user.ID); err != nil {
+			slog.Warn("merge guest", "guest", guest.ID, "user", user.ID, "err", err)
+		}
+	}
 	token := randomString()
 	if err := s.store.CreateSession(ctx, hashToken(token), user.ID, time.Now().Add(sessionTTL)); err != nil {
 		slog.Error("create session", "err", err)
@@ -90,6 +96,30 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setCookie(w, sessionCookie, token, sessionTTL)
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// handleGuest gives a visitor without a session an anonymous one, so they can
+// play the warm-up level without signing in. An existing session is kept.
+func (s *Server) handleGuest(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.sessionUser(r); err == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	} else if !errors.Is(err, store.ErrNotFound) {
+		writeStoreError(w, r, err)
+		return
+	}
+	user, err := s.store.CreateGuest(r.Context())
+	if err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	token := randomString()
+	if err := s.store.CreateSession(r.Context(), hashToken(token), user.ID, time.Now().Add(sessionTTL)); err != nil {
+		writeStoreError(w, r, err)
+		return
+	}
+	s.setCookie(w, sessionCookie, token, sessionTTL)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -129,14 +159,19 @@ func (s *Server) fetchUserInfo(ctx context.Context, tok *oauth2.Token) (*googleU
 	return &info, nil
 }
 
+// sessionUser is the user of the request's session cookie; ErrNotFound if there is none.
+func (s *Server) sessionUser(r *http.Request) (*store.User, error) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return nil, store.ErrNotFound
+	}
+	return s.store.SessionUser(r.Context(), hashToken(c.Value))
+}
+
+// requireUser lets in guests too; handlers that need a Google account check user.Guest.
 func (s *Server) requireUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookie)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, tr(r, "требуется вход через Google", "sign in with Google required"))
-			return
-		}
-		user, err := s.store.SessionUser(r.Context(), hashToken(c.Value))
+		user, err := s.sessionUser(r)
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusUnauthorized, tr(r, "требуется вход через Google", "sign in with Google required"))
 			return
@@ -150,7 +185,7 @@ func (s *Server) requireUser(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return s.requireUser(func(w http.ResponseWriter, r *http.Request) {
-		if !s.cfg.IsAdmin(currentUser(r).Email) {
+		if u := currentUser(r); u.Guest || !s.cfg.IsAdmin(u.Email) {
 			writeError(w, http.StatusForbidden, tr(r, "доступ только для администраторов", "admins only"))
 			return
 		}

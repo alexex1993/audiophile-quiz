@@ -102,6 +102,7 @@ a:hover { color: var(--accent-3); }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 480px) { .card { padding: 20px 18px; } }
 
 main { padding: 40px 0 80px; }
 
@@ -146,6 +147,8 @@ main { padding: 40px 0 80px; }
   font-family: var(--mono); font-size: 12.5px; padding: 6px 12px; border-radius: 999px;
   border: 1px solid var(--line-strong); color: var(--text-dim); background: rgba(13, 34, 87, .5);
 }
+/* A pill inside running text stays one unbroken box. */
+p .pill { display: inline-block; white-space: nowrap; margin: 2px 0; line-height: 1.35; }
 .pill.ok { color: var(--ok); border-color: rgba(52,211,153,.35); }
 .pill.bad { color: var(--bad); border-color: rgba(248,113,113,.35); }
 .pill.accent { color: var(--accent-3); border-color: rgba(56,189,248,.4); }
@@ -160,6 +163,14 @@ main { padding: 40px 0 80px; }
   cursor: pointer; border-radius: 10px; transition: background .15s;
 }
 .history li:hover { background: rgba(96,165,250,.06); }
+/* Date and level pill wrap onto two lines on narrow screens instead of pushing the percentage out. */
+.history-meta { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; }
+.history-date, .history-pct { white-space: nowrap; }
+@media (max-width: 480px) {
+  .history li { gap: 10px; }
+  .history .score-badge { min-width: 58px; padding: 6px 8px; }
+  .history-date { font-size: 14.5px; }
+}
 .history li:last-child { border-bottom: 0; }
 .score-badge {
   font-family: var(--mono); font-weight: 700; padding: 6px 10px; border-radius: 10px; min-width: 70px; text-align: center;
@@ -439,6 +450,13 @@ details.attempt .result-list li { grid-template-columns: 34px 1fr; padding: 10px
 
 /* ---------- after the result: next levels / share card ---------- */
 .next-levels .option.level:disabled { opacity: .5; cursor: not-allowed; }
+a.option, a.option:hover { color: var(--text); text-decoration: none; }
+.option.locked .num { opacity: .6; }
+.option.locked small { color: var(--warn); }
+
+/* ---------- landing: sign-in or guest warm-up ---------- */
+.hero-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.hero-note { font-size: 14px; margin: 14px 0 0; }
 .share-card { text-align: center; }
 .share-preview { display: grid; place-items: center; min-height: 120px; }
 .share-preview img { display: block; width: 100%; max-width: 640px; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--line); }

@@ -9,6 +9,11 @@ const options = (kbps) => [
 ];
 
 const LEVEL_KEY = "difficulty"; // localStorage: the last level the user picked
+const LOGIN_URL = "/auth/google/login";
+const GOOGLE_ICON = `<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>`;
+
+// Guests (no Google account) may only play the warm-up level.
+const guestLocked = (name) => me?.user.guest && name !== me.guest_difficulty;
 
 function levelPill(name) {
   return `<span class="pill level-pill level-${esc(name)}">${esc(levelTitle(name))} · ${levelKbps(me?.difficulties, name)} kbps</span>`;
@@ -49,6 +54,12 @@ async function route() {
 }
 
 function renderNav() {
+  if (me.user.guest) {
+    nav.innerHTML = `
+      <span class="user-chip"><span class="pill">${t("Гость", "Guest")}</span></span>
+      <a class="btn btn-sm" href="${LOGIN_URL}">${t("Войти через Google", "Sign in with Google")}</a>`;
+    return;
+  }
   nav.innerHTML = `
     ${me.is_admin ? `<a class="btn btn-ghost btn-sm" href="/admin">${t("Админка", "Admin")}</a>` : ""}
     <span class="user-chip">
@@ -73,7 +84,8 @@ function renderLanding(cfg) {
   const counts = cfg.difficulties.map((l) => l.questions);
   const minQ = Math.min(...counts), maxQ = Math.max(...counts);
   const nQ = minQ === maxQ ? `${maxQ}` : `${minQ}–${maxQ}`;
-  nav.innerHTML = `<a class="btn btn-sm" href="/auth/google/login">${t("Войти", "Sign in")}</a>`;
+  nav.innerHTML = `<a class="btn btn-sm" href="${LOGIN_URL}">${t("Войти", "Sign in")}</a>`;
+  const warmup = cfg.difficulties.find((l) => l.name === (cfg.guest_difficulty || "easy"));
   const bars = Array.from({ length: 28 }, (_, i) =>
     `<span style="height:${30 + Math.round(60 * Math.abs(Math.sin(i * 0.7)))}px;animation-delay:${(i * 0.07).toFixed(2)}s"></span>`).join("");
   app.innerHTML = `
@@ -86,10 +98,12 @@ function renderLanding(cfg) {
         `Audiophiles are sure they can tell an original from a compressed file by ear. Test yourself:
         two ${cfg.clip_seconds}-second clips of the same track — guess which one is lossless and which is AAC.
         Three difficulty levels: ${cfg.difficulties.map((l) => `${levelTitle(l.name).toLowerCase()} — ${l.kbps} kbps, ${l.questions} ${plural(l.questions, "трек|трека|треков", "track|tracks")}`).join("; ")}.`)}</p>
-      <a class="btn btn-google btn-lg" href="/auth/google/login">
-        <svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
-        ${t("Войти через Google и начать", "Sign in with Google and start")}
-      </a>
+      <div class="hero-actions">
+        <a class="btn btn-google btn-lg" href="${LOGIN_URL}">${GOOGLE_ICON} ${t("Войти через Google и начать", "Sign in with Google and start")}</a>
+        ${warmup ? `<button class="btn btn-ghost btn-lg" id="guest">${t("Попробовать без входа", "Try without signing in")}</button>` : ""}
+      </div>
+      ${warmup ? `<p class="faint hero-note">${t(`Без входа — только разминка: ${levelTitle(warmup.name).toLowerCase()} уровень, ${warmup.questions} ${plural(warmup.questions, "трек|трека|треков", "track|tracks")}, AAC ${warmup.kbps} kbps.`,
+        `Without signing in you get the warm-up only: the ${levelTitle(warmup.name).toLowerCase()} level, ${warmup.questions} ${plural(warmup.questions, "track|tracks", "track|tracks")}, AAC ${warmup.kbps} kbps.`)}</p>` : ""}
       <div class="hero-wave">${bars}</div>
       <div class="spec-strip">
         <span class="pill ok">FLAC · ${t("исходные bit depth и sample rate", "original bit depth and sample rate")}</span>
@@ -108,6 +122,28 @@ function renderLanding(cfg) {
         <p>${t(`После ${nQ} ${plural(maxQ, "трека|треков|треков", "track|tracks")} — счёт, разбор ответов и шанс, что такой результат получился бы случайно.`,
           `After ${nQ} ${plural(maxQ, "track|tracks", "track|tracks")} — your score, a breakdown of the answers and the chance of getting such a result by luck.`)}</p></div>
     </section>`;
+  app.querySelector("#guest")?.addEventListener("click", (e) => tryAsGuest(warmup.name, e.currentTarget));
+}
+
+// tryAsGuest opens an anonymous session and starts the warm-up right away.
+async function tryAsGuest(level, btn) {
+  btn.disabled = true;
+  try {
+    await api("/auth/guest", { method: "POST" });
+  } catch (err) {
+    toast(err.message, true);
+    btn.disabled = false;
+    return;
+  }
+  try {
+    const a = await api("/api/quiz/start", { method: "POST", json: { difficulty: level } });
+    location.hash = `#/quiz/${a.id}`;
+  } catch (err) {
+    // The session exists now: the guest's home page explains what blocks the start.
+    toast(err.message, true);
+    history.replaceState(null, "", "#/");
+    route();
+  }
 }
 
 // ---------- home ----------
@@ -118,14 +154,18 @@ async function renderHome() {
   const unfinished = q.unfinished_attempt_id;
   const canStart = unfinished || (!q.exhausted && me.tracks_available > 0);
   const firstName = (me.user.name || "").split(" ")[0];
+  const guest = me.user.guest;
 
   const levels = me.difficulties || DEFAULT_LEVELS;
   let level = "medium";
   try { level = localStorage.getItem(LEVEL_KEY) || level; } catch {}
   if (!levels.some((l) => l.name === level)) level = "medium";
+  if (guestLocked(level)) level = me.guest_difficulty;
 
   // Unless something blocks the start, the note follows the selected level.
   const levelNote = (name) => {
+    if (guestLocked(name)) return t("Средний и сложный уровни открываются после входа через Google. Результаты разминки сохранятся в истории.",
+      "The medium and hard levels open once you sign in with Google. Your warm-up results stay in your history.");
     const n = levels.find((l) => l.name === name)?.questions ?? 0;
     return `${n} ${plural(n, "трек|трека|треков", "track|tracks")} ${t("в случайном порядке. Наушники и тишина приветствуются.", "in random order. Headphones and silence are recommended.")}`;
   };
@@ -139,9 +179,12 @@ async function renderHome() {
 
   app.innerHTML = `
     <section class="welcome">
-      <div class="eyebrow">${t("Личный кабинет", "Your dashboard")}</div>
+      <div class="eyebrow">${guest ? t("Гостевой режим", "Guest mode") : t("Личный кабинет", "Your dashboard")}</div>
       <h1>${t("Привет", "Hi")}${firstName ? ", " + esc(firstName) : ""}!</h1>
-      <p class="muted">${t("Готовы проверить свой аудиофильский слух?", "Ready to put your audiophile ears to the test?")}</p>
+      <p class="muted">${guest
+        ? t("Без входа доступна только разминка. Войдите через Google, чтобы пройти средний и сложный уровни.",
+          "Without signing in you can only take the warm-up. Sign in with Google to take the medium and hard levels.")
+        : t("Готовы проверить свой аудиофильский слух?", "Ready to put your audiophile ears to the test?")}</p>
     </section>
     <div class="grid ${q.unlimited ? "grid-2" : ""}" style="margin-top:24px">
       ${q.unlimited ? `
@@ -159,15 +202,15 @@ async function renderHome() {
           ${unfinished ? "" : `
           <div class="levels" role="radiogroup" aria-label="${t("Уровень сложности", "Difficulty")}">${levels.map((l) => `
             <div class="level-wrap">
-              <button class="option level ${l.name === level ? "selected" : ""}" data-level="${esc(l.name)}" role="radio" aria-checked="${l.name === level}" aria-describedby="level-tip-${esc(l.name)}">
-                <span class="num">${l.kbps}</span><span>${esc(levelTitle(l.name))}<small>AAC ${l.kbps} kbps · ${esc(LEVEL_TEXT[l.name]?.hint || "")}</small></span>
+              <button class="option level ${l.name === level ? "selected" : ""} ${guestLocked(l.name) ? "locked" : ""}" data-level="${esc(l.name)}" role="radio" aria-checked="${l.name === level}" aria-describedby="level-tip-${esc(l.name)}">
+                <span class="num">${l.kbps}</span><span>${esc(levelTitle(l.name))}<small>AAC ${l.kbps} kbps · ${guestLocked(l.name) ? `🔒 ${t("после входа через Google", "after signing in with Google")}` : esc(LEVEL_TEXT[l.name]?.hint || "")}</small></span>
               </button>
               <div class="level-tip" role="tooltip" id="level-tip-${esc(l.name)}">${levelAbout(l)}</div>
             </div>`).join("")}
           </div>
           <div class="level-about">${levelAbout(levels.find((l) => l.name === level))}</div>`}
         </div>
-        <div><button class="btn btn-lg" id="start" ${canStart ? "" : "disabled"}>${unfinished ? t("Продолжить тест", "Continue the test") : t("Начать тест", "Start the test")}</button></div>
+        <div><button class="btn btn-lg" id="start"></button></div>
       </div>
     </div>
     <div class="card" style="margin-top:20px">
@@ -175,10 +218,8 @@ async function renderHome() {
       ${history.length ? `<ul class="history">${history.map((a) => `
         <li data-id="${a.id}">
           <span class="score-badge">${a.score}/${a.total}</span>
-          <span>${fmtDate(a.finished_at)}</span>
-          ${levelPill(a.difficulty)}
-          <span class="spacer"></span>
-          <span class="faint">${Math.round((a.score / a.total) * 100)}% →</span>
+          <span class="history-meta"><span class="history-date">${fmtDate(a.finished_at)}</span>${levelPill(a.difficulty)}</span>
+          <span class="history-pct faint">${Math.round((a.score / a.total) * 100)}% →</span>
         </li>`).join("")}</ul>` : `<p class="faint">${t("Пока ни одного завершённого теста.", "No finished tests yet.")}</p>`}
     </div>`;
 
@@ -190,9 +231,20 @@ async function renderHome() {
       x.setAttribute("aria-checked", x === b);
     });
     app.querySelector(".level-about").innerHTML = levelAbout(levels.find((l) => l.name === level));
-    if (noteFollowsLevel) app.querySelector(".start-note").textContent = levelNote(level);
+    app.querySelector(".start-note").textContent = noteFollowsLevel || guestLocked(level) ? levelNote(level) : startNote;
+    updateStart();
   }));
-  app.querySelector("#start").onclick = (e) => startAttempt(level, e.currentTarget);
+  // A level locked for a guest turns the start button into the Google sign-in.
+  const startBtn = app.querySelector("#start");
+  const updateStart = () => {
+    const locked = !unfinished && guestLocked(level);
+    startBtn.classList.toggle("btn-google", locked);
+    startBtn.disabled = !locked && !canStart;
+    startBtn.innerHTML = locked ? `${GOOGLE_ICON} ${t("Войти через Google", "Sign in with Google")}`
+      : unfinished ? t("Продолжить тест", "Continue the test") : t("Начать тест", "Start the test");
+  };
+  updateStart();
+  startBtn.onclick = () => (!unfinished && guestLocked(level) ? (location.href = LOGIN_URL) : startAttempt(level, startBtn));
   app.querySelectorAll(".history li").forEach((li) => (li.onclick = () => (location.hash = `#/result/${li.dataset.id}`)));
 }
 
@@ -353,6 +405,7 @@ function warmupVerdict() {
 function nextLevelsCard() {
   const q = me.quota;
   const levels = (me.difficulties || DEFAULT_LEVELS).filter((l) => l.name !== "easy");
+  if (me.user.guest) return guestSignInCard(levels);
   let note = "";
   if (q.unfinished_attempt_id) note = t("У вас есть незавершённая попытка — кнопка продолжит её.", "You have an unfinished attempt — the button will resume it.");
   else if (me.tracks_available === 0) note = t("Библиотека треков пока пуста — загляните позже.", "The track library is empty for now — check back later.");
@@ -368,6 +421,24 @@ function nextLevelsCard() {
         <button class="option level" data-level="${esc(l.name)}" ${canStart ? "" : "disabled"}>
           <span class="num">${l.kbps}</span><span>${t("Пройти", "Take")} ${esc(levelTitle(l.name).toLowerCase())} ${t("уровень", "level")}<small>AAC ${l.kbps} kbps · ${esc(LEVEL_TEXT[l.name]?.hint || "")}</small></span>
         </button>`).join("")}
+      </div>
+    </div>`;
+}
+
+// A guest's warm-up result: the levels that test hearing need a Google account.
+function guestSignInCard(levels) {
+  return `
+    <div class="card next-levels" style="margin-top:28px">
+      <h3>${t("Теперь — настоящий тест", "Now for the real test")}</h3>
+      <p class="muted" style="margin-top:-6px">${t("Сервис работает. Средний и сложный уровни — там, где разница действительно тонкая, — открываются после входа через Google. Результат разминки сохранится в вашей истории.",
+        "The service works. The medium and hard levels — where the difference is actually subtle — open once you sign in with Google. Your warm-up result stays in your history.")}</p>
+      <div class="grid grid-2">${levels.map((l) => `
+        <a class="option level locked" href="${LOGIN_URL}">
+          <span class="num">${l.kbps}</span><span>${esc(levelTitle(l.name))}<small>AAC ${l.kbps} kbps · 🔒 ${t("после входа через Google", "after signing in with Google")}</small></span>
+        </a>`).join("")}
+      </div>
+      <div class="center" style="margin-top:20px">
+        <a class="btn btn-google btn-lg" href="${LOGIN_URL}">${GOOGLE_ICON} ${t("Войти через Google и продолжить", "Sign in with Google and continue")}</a>
       </div>
     </div>`;
 }
@@ -632,6 +703,6 @@ async function renderResult(id) {
   });
   audio.onended = () => app.querySelectorAll(".mini-play button").forEach((x) => x.classList.remove("on"));
 
-  if (warmup) app.querySelectorAll(".next-levels .level").forEach((b) => (b.onclick = () => startAttempt(b.dataset.level, b)));
+  if (warmup) app.querySelectorAll(".next-levels button.level").forEach((b) => (b.onclick = () => startAttempt(b.dataset.level, b)));
   else fillShareCard(a, kbps, chanceText).catch(() => app.querySelector(".share-card")?.remove());
 }

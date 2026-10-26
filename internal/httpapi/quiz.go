@@ -16,8 +16,9 @@ import (
 // handleConfig exposes the public quiz rules for the landing page.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"clip_seconds": s.cfg.ClipSeconds,
-		"difficulties": store.Difficulties,
+		"clip_seconds":     s.cfg.ClipSeconds,
+		"difficulties":     store.Difficulties,
+		"guest_difficulty": store.WarmupDifficulty,
 	})
 }
 
@@ -49,7 +50,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":             user,
-		"is_admin":         s.cfg.IsAdmin(user.Email),
+		"is_admin":         !user.Guest && s.cfg.IsAdmin(user.Email),
+		"guest_difficulty": store.WarmupDifficulty,
 		"quota":            quota,
 		"tracks_available": tracks,
 		"difficulties":     levels,
@@ -57,7 +59,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStartQuiz resumes an unfinished attempt or starts a new one at the
-// requested difficulty (JSON {"difficulty": "easy"|"medium"|"hard"}, medium by default).
+// requested difficulty (JSON {"difficulty": "easy"|"medium"|"hard"}, medium by
+// default). Guests may only play the warm-up level.
 func (s *Server) handleStartQuiz(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Difficulty string `json:"difficulty"`
@@ -66,14 +69,21 @@ func (s *Server) handleStartQuiz(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, tr(r, "неверный запрос", "bad request"))
 		return
 	}
+	user := currentUser(r)
 	if req.Difficulty == "" {
 		req.Difficulty = store.DefaultDifficulty
+		if user.Guest {
+			req.Difficulty = store.WarmupDifficulty
+		}
 	}
 	if _, ok := store.DifficultyByName(req.Difficulty); !ok {
 		writeError(w, http.StatusBadRequest, tr(r, "неизвестный уровень сложности", "unknown difficulty"))
 		return
 	}
-	user := currentUser(r)
+	if user.Guest && req.Difficulty != store.WarmupDifficulty {
+		writeError(w, http.StatusForbidden, tr(r, "войдите через Google, чтобы пройти этот уровень", "sign in with Google to take this level"))
+		return
+	}
 	id, err := s.store.StartAttempt(r.Context(), user.ID, s.attemptLimit(user), req.Difficulty)
 	if err != nil {
 		writeStoreError(w, r, err)

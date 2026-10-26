@@ -48,14 +48,16 @@ func (s *Store) CreateTrack(ctx context.Context, t *Track) error {
 	).Scan(&t.ID, &t.Active, &t.CreatedAt)
 }
 
-// ListTracks returns all tracks with answer statistics from finished questions.
+// ListTracks returns all tracks with answer statistics from answered
+// questions; warm-up attempts are left out, their artefacts are too obvious to tell anything.
 func (s *Store) ListTracks(ctx context.Context) ([]*Track, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT `+trackCols+`,
 			count(q.user_answer)::int,
 			count(*) FILTER (WHERE q.user_answer = q.correct_answer)::int
-		FROM tracks t LEFT JOIN attempt_questions q ON q.track_id = t.id
-		GROUP BY t.id ORDER BY t.id DESC`)
+		FROM tracks t LEFT JOIN (attempt_questions q JOIN attempts a ON a.id = q.attempt_id AND a.difficulty <> $1)
+			ON q.track_id = t.id
+		GROUP BY t.id ORDER BY t.id DESC`, WarmupDifficulty)
 	if err != nil {
 		return nil, err
 	}

@@ -50,6 +50,10 @@ var Difficulties = []Difficulty{{"easy", 32, 5}, {"medium", 128, 12}, {"hard", 3
 
 const DefaultDifficulty = "medium"
 
+// WarmupDifficulty only checks that the service works: it is the one level
+// open to guests, and it is left out of the per-track stats.
+const WarmupDifficulty = "easy"
+
 func DifficultyByName(name string) (Difficulty, bool) {
 	for _, d := range Difficulties {
 		if d.Name == name {
@@ -367,7 +371,7 @@ type UserStats struct {
 // UserStats summarises finished attempts per user, for the admin panel.
 func (s *Store) UserStats(ctx context.Context) ([]*UserStats, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT u.id, u.google_sub, u.email, u.name, u.picture, u.created_at, u.last_login_at,
+		SELECT u.id, u.google_sub IS NULL, u.email, u.name, u.picture, u.created_at, u.last_login_at,
 			count(a.id)::int, max(a.score),
 			avg(a.score::float8 * 100 / NULLIF(a.total, 0)),
 			max(a.finished_at)
@@ -378,7 +382,7 @@ func (s *Store) UserStats(ctx context.Context) ([]*UserStats, error) {
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (*UserStats, error) {
 		st := &UserStats{}
-		return st, r.Scan(&st.ID, &st.GoogleSub, &st.Email, &st.Name, &st.Picture, &st.CreatedAt, &st.LastLoginAt,
+		return st, r.Scan(&st.ID, &st.Guest, &st.Email, &st.Name, &st.Picture, &st.CreatedAt, &st.LastLoginAt,
 			&st.Attempts, &st.BestScore, &st.AvgPercent, &st.LastPlayed)
 	})
 }

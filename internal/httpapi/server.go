@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /auth/google/login", s.handleLogin)
 	mux.HandleFunc("GET /auth/google/callback", s.handleCallback)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("POST /auth/guest", s.handleGuest)
 
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/me", s.requireUser(s.handleMe))

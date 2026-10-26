@@ -7,20 +7,19 @@ let previewAudio = new Audio();
 init();
 
 async function init() {
+  const signIn = () => (app.innerHTML = `<div class="card center" style="max-width:420px;margin:60px auto">
+    <h2>${t("Вход в админку", "Admin sign-in")}</h2><p class="muted">${t("Войдите Google-аккаунтом из списка ADMIN_EMAILS.", "Sign in with a Google account listed in ADMIN_EMAILS.")}</p>
+    <a class="btn" href="/auth/google/login">${t("Войти через Google", "Sign in with Google")}</a></div>`);
   try {
     const me = await api("/api/me");
+    if (me.user.guest) return signIn();
     if (!me.is_admin) {
       app.innerHTML = `<div class="notice error">${t("Доступ только для администраторов", "Admins only")} (${esc(me.user.email)}).</div>`;
       return;
     }
     cfg = await api("/api/config");
   } catch (e) {
-    if (e.status === 401) {
-      app.innerHTML = `<div class="card center" style="max-width:420px;margin:60px auto">
-        <h2>${t("Вход в админку", "Admin sign-in")}</h2><p class="muted">${t("Войдите Google-аккаунтом из списка ADMIN_EMAILS.", "Sign in with a Google account listed in ADMIN_EMAILS.")}</p>
-        <a class="btn" href="/auth/google/login">${t("Войти через Google", "Sign in with Google")}</a></div>`;
-      return;
-    }
+    if (e.status === 401) return signIn();
     app.innerHTML = `<div class="notice error">${esc(e.message)}</div>`;
     return;
   }
@@ -55,7 +54,7 @@ function renderUploader() {
       <h3>${t("Добавить трек", "Add a track")}</h3>
       <p class="muted" style="margin-top:-6px;font-size:14px">
         ${t("Исходник", "Source")} (FLAC, WAV, ALAC, AIFF, WavPack; ${t("до 24 бит", "up to 24 bit")}) → ${t(`отрывок ${cfg.clip_seconds} с`, `${cfg.clip_seconds} s clip`)} →
-        <span class="pill ok">lossless.flac</span> ${t("и", "and")} <span class="pill bad">AAC ${cfg.difficulties.map((l) => l.kbps).join(" / ")} kbps → encoded_*.flac</span>
+        <span class="pill ok">lossless.flac</span> ${t("и", "and")} <span class="pill bad">AAC ${cfg.difficulties.map((l) => l.kbps).join(" / ")} kbps</span> → <span class="pill bad">encoded_*.flac</span>
         (${t("по файлу на уровень сложности", "one file per difficulty level")}).
         ${t("Исходник удаляется с сервера после обработки.", "The source is deleted from the server after processing.")}
       </p>
@@ -228,7 +227,7 @@ async function loadTracks() {
     return;
   }
   box.innerHTML = `<div class="table-wrap"><table class="table">
-    <thead><tr><th>${t("Трек", "Track")}</th><th>${t("Формат", "Format")}</th><th>${t("Отрывок", "Clip")}</th><th>${t("Угадали", "Guessed")}</th><th>${t("Прослушать", "Listen")}</th><th>${t("Активен", "Active")}</th><th></th></tr></thead>
+    <thead><tr><th>${t("Трек", "Track")}</th><th>${t("Формат", "Format")}</th><th>${t("Отрывок", "Clip")}</th><th title="${t("Только средний и сложный уровни", "Medium and hard levels only")}">${t("Угадали", "Guessed")}<div class="faint" style="font-size:11px;font-weight:500">${t("без лёгкого", "excl. easy")}</div></th><th>${t("Прослушать", "Listen")}</th><th>${t("Активен", "Active")}</th><th></th></tr></thead>
     <tbody>${tracks.map((track) => `
       <tr class="${track.active ? "" : "inactive"}" data-id="${track.id}">
         <td><b>${esc(track.title)}</b><div class="faint" style="font-size:13px">${esc(track.artist) || "—"}</div></td>
@@ -314,7 +313,8 @@ async function loadUsers() {
       <thead><tr><th>${t("Пользователь", "User")}</th><th>${t("Попыток", "Attempts")}</th><th>${t("Лучший", "Best")}</th><th>${t("Средний", "Average")}</th><th>${t("Последний тест", "Last test")}</th><th>${t("Регистрация", "Signed up")}</th></tr></thead>
       <tbody>${users.map((u) => `<tr class="${u.attempts ? "user-row" : ""}" data-id="${u.id}">
         <td><div class="row" style="flex-wrap:nowrap">${u.picture ? `<img class="avatar" src="${esc(u.picture)}" alt="" referrerpolicy="no-referrer">` : ""}
-          <div><b>${esc(u.name) || "—"}</b><div class="faint" style="font-size:13px">${esc(u.email)}</div></div></div></td>
+          <div>${u.guest ? `<b>${t("Гость", "Guest")} #${u.id}</b><div class="faint" style="font-size:13px">${t("без Google-аккаунта", "no Google account")}</div>`
+            : `<b>${esc(u.name) || "—"}</b><div class="faint" style="font-size:13px">${esc(u.email)}</div>`}</div></div></td>
         <td class="mono">${u.attempts}</td>
         <td class="mono">${u.best_score ?? "—"}</td>
         <td class="mono">${u.avg_percent != null ? Math.round(u.avg_percent) + "%" : "—"}</td>
