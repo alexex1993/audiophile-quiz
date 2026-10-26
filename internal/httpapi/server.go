@@ -76,6 +76,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, s.static, "admin.html")
 	})
+	mux.HandleFunc("GET /legal", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFileFS(w, r, s.static, "legal.html")
+	})
 	mux.Handle("GET /", files)
 
 	return s.securityHeaders(s.csrfGuard(s.maintenanceGate(mux)))

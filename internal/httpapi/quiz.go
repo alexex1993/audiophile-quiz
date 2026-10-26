@@ -19,6 +19,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		"clip_seconds":     s.cfg.ClipSeconds,
 		"difficulties":     store.Difficulties,
 		"guest_difficulty": store.WarmupDifficulty,
+		"contact_email":    s.cfg.ContactEmail,
 	})
 }
 

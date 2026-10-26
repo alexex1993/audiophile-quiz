@@ -22,6 +22,8 @@ type Config struct {
 
 	AdminEmails map[string]bool
 
+	ContactEmail string // shown on /legal for takedown requests
+
 	AttemptsPerDay int // hidden from players
 	ClipSeconds    int
 	MaxUploadMB    int64
@@ -47,6 +49,7 @@ func Load() (*Config, error) {
 		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
 		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
 		AdminEmails:        map[string]bool{},
+		ContactEmail:       strings.TrimSpace(os.Getenv("CONTACT_EMAIL")),
 		AttemptsPerDay:     envInt("ATTEMPTS_PER_DAY", 10),
 		ClipSeconds:        envInt("CLIP_SECONDS", 30),
 		MaxUploadMB:        int64(envInt("MAX_UPLOAD_MB", 1024)),

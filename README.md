@@ -72,6 +72,7 @@ Console и указать путь в `GOOGLE_CREDENTIALS_FILE`.
 | `DATABASE_URL` | задаётся в compose | если используете внешний Postgres |
 | `APP_PORT` | `8080` | порт на хосте |
 | `DB_PORT` | `5432` | порт Postgres на хосте, только `127.0.0.1` (для DBeaver/psql) |
+| `CONTACT_EMAIL` | — | адрес для обращений правообладателей на странице `/legal` |
 | `ATTEMPTS_PER_DAY` | `10` | скрыт от игроков |
 | `CLIP_SECONDS` | `30` | |
 | `MAX_UPLOAD_MB` | `1024` | |

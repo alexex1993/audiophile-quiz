@@ -23,6 +23,8 @@ if (LANG === "en") {
     else el.textContent = el.dataset.en;
   });
 }
+// Longer texts with markup come as sibling blocks, one per language.
+document.querySelectorAll("[data-lang]").forEach((el) => { el.hidden = el.dataset.lang !== LANG; });
 document.querySelectorAll(".lang-switch").forEach((a) => {
   a.textContent = LANG === "ru" ? "English" : "Русский";
   a.onclick = (e) => {
