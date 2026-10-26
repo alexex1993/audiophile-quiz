@@ -10,8 +10,9 @@ async function init() {
   const signIn = () => (app.innerHTML = `<div class="card center" style="max-width:420px;margin:60px auto">
     <h2>${t("Вход в админку", "Admin sign-in")}</h2><p class="muted">${t("Войдите Google-аккаунтом из списка ADMIN_EMAILS.", "Sign in with a Google account listed in ADMIN_EMAILS.")}</p>
     <a class="btn" href="/auth/google/login">${t("Войти через Google", "Sign in with Google")}</a></div>`);
+  let me;
   try {
-    const me = await api("/api/me");
+    me = await api("/api/me");
     if (me.user.guest) return signIn();
     if (!me.is_admin) {
       app.innerHTML = `<div class="notice error">${t("Доступ только для администраторов", "Admins only")} (${esc(me.user.email)}).</div>`;
