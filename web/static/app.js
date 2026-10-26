@@ -41,6 +41,7 @@ async function route() {
     return renderError(e);
   }
   renderNav();
+  renderMaintenanceBanner();
 
   const [, view, id] = location.hash.replace(/^#\/?/, "/").split("/");
   try {
@@ -68,6 +69,15 @@ function renderNav() {
     </span>
     <button class="btn btn-ghost btn-sm" id="logout">${t("Выйти", "Sign out")}</button>`;
   nav.querySelector("#logout").onclick = logout;
+}
+
+// Admins still see the site during maintenance; remind them it is closed to everyone else.
+function renderMaintenanceBanner() {
+  document.getElementById("maint-banner")?.remove();
+  if (!me.maintenance) return;
+  app.before(h(`<div class="container" id="maint-banner" style="margin-top:20px"><div class="notice warn">
+    ${t("Включено техническое обслуживание: сайт закрыт для всех, кроме администраторов.", "Maintenance mode is on: the site is closed to everyone but admins.")}
+    <a href="/admin">${t("Выключить в админке", "Turn it off in the admin page")}</a></div></div>`));
 }
 
 function renderError(e) {
@@ -213,6 +223,7 @@ async function renderHome() {
         <div><button class="btn btn-lg" id="start"></button></div>
       </div>
     </div>
+    ${guest ? "" : rankCard(me.rank)}
     <div class="card" style="margin-top:20px">
       <h3>${t("История", "History")}</h3>
       ${history.length ? `<ul class="history">${history.map((a) => `
@@ -258,6 +269,25 @@ async function startAttempt(level, btn) {
     toast(err.message, true);
     btn.disabled = false;
   }
+}
+
+// rankCard shows the player's place in the rating. The server sends only the
+// place and the number of rated players: no points, nothing about anyone else.
+function rankCard(rank) {
+  return `
+    <div class="card" style="margin-top:20px">
+      <div class="eyebrow">${t("Рейтинг", "Rating")}</div>
+      ${rank ? `
+      <div class="row" style="margin-top:10px;align-items:flex-end">
+        <div class="big-number">${rank.place}</div>
+        <div class="muted" style="padding-bottom:6px">${t(`место из ${rank.total}`, `place out of ${rank.total}`)}</div>
+      </div>` : `
+      <p class="muted" style="margin:10px 0 0">${t("Пройдите средний или сложный уровень, чтобы попасть в рейтинг.",
+        "Take the medium or hard level to get into the rating.")}</p>`}
+      <p class="faint" style="font-size:13px;margin:14px 0 0">${t(
+        "Учитывается лучший результат на среднем и сложном уровнях, сложный ценится выше. Чем больше попыток, тем строже оценка. Рейтинг анонимный: никто не видит ни других участников, ни их результаты.",
+        "Your best result at the medium and hard levels counts, with hard worth more. The more attempts you take, the stricter the rating. It is anonymous: nobody sees other players or their results.")}</p>
+    </div>`;
 }
 
 // levelAbout is the long description of a level: in a tooltip over its
@@ -657,6 +687,8 @@ async function renderResult(id) {
       ${warmup ? "" : `<div class="spec-strip">
         <span class="pill accent">${t(`случайно угадать ≥ ${a.score} из ${a.total}`, `chance of guessing ≥ ${a.score} of ${a.total}`)}: ${chanceText}</span>
         <span class="pill">${t("ожидание при угадывании", "expected by guessing")}: ${(a.total / 4).toLocaleString(LOCALE)}</span>
+        ${me.rank ? `<span class="pill">${t(`ваше место в рейтинге сейчас: ${me.rank.place} из ${me.rank.total}`,
+          `your current rating place: ${me.rank.place} of ${me.rank.total}`)}</span>` : ""}
       </div>`}
     </section>
     ${warmup ? nextLevelsCard() : shareCardSection()}

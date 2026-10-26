@@ -4,7 +4,9 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -32,6 +34,9 @@ func (c *Config) RedirectURL() string { return c.BaseURL + "/auth/google/callbac
 func (c *Config) SecureCookies() bool { return strings.HasPrefix(c.BaseURL, "https://") }
 
 func (c *Config) IsAdmin(email string) bool { return c.AdminEmails[strings.ToLower(email)] }
+
+// AdminEmailList returns the lowercased admin emails.
+func (c *Config) AdminEmailList() []string { return slices.Collect(maps.Keys(c.AdminEmails)) }
 
 func Load() (*Config, error) {
 	c := &Config{

@@ -460,3 +460,14 @@ a.option, a.option:hover { color: var(--text); text-decoration: none; }
 .share-card { text-align: center; }
 .share-preview { display: grid; place-items: center; min-height: 120px; }
 .share-preview img { display: block; width: 100%; max-width: 640px; height: auto; border-radius: var(--radius-sm); border: 1px solid var(--line); }
+
+/* ---------- maintenance ---------- */
+.notice.warn { border-color: rgba(251,191,36,.45); color: #fde68a; background: rgba(120, 83, 9, .25); }
+.maintenance { max-width: 520px; margin: 60px auto; padding: 40px 28px; }
+.maintenance h1 { margin: 8px 0 10px; letter-spacing: -0.02em; }
+.maintenance p { margin: 0; }
+.maintenance-icon {
+  width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 18px; display: grid; place-items: center;
+  color: var(--warn); background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.3);
+}
+.maintenance-icon svg { width: 32px; height: 32px; }

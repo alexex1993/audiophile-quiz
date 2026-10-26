@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -23,6 +24,8 @@ type Server struct {
 	store  *store.Store
 	oauth  *oauth2.Config
 	static fs.FS
+	// maintenance mirrors the DB flag so the gate needs no query per request.
+	maintenance atomic.Bool
 }
 
 func New(cfg *config.Config, st *store.Store, static fs.FS) *Server {
@@ -65,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/users", s.requireAdmin(s.handleUserStats))
 	mux.HandleFunc("GET /api/admin/users/{id}/attempts", s.requireAdmin(s.handleUserAttempts))
 	mux.HandleFunc("GET /api/admin/stats", s.requireAdmin(s.handleStats))
+	mux.HandleFunc("PUT /api/admin/maintenance", s.requireAdmin(s.handleSetMaintenance))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 
@@ -74,7 +78,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("GET /", files)
 
-	return s.securityHeaders(s.csrfGuard(mux))
+	return s.securityHeaders(s.csrfGuard(s.maintenanceGate(mux)))
 }
 
 // csrfGuard requires a custom header on state-changing API calls. Browsers

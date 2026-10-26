@@ -80,6 +80,8 @@ async function api(path, opts = {}) {
   const res = await fetch(path, init);
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
+  // The site was closed for maintenance mid-session: reload to get the stub page.
+  if (res.status === 503 && data.maintenance) location.reload();
   if (!res.ok) {
     const err = new Error(data.error || `${t("Ошибка", "Error")} ${res.status}`);
     err.status = res.status;

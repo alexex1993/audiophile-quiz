@@ -40,13 +40,17 @@ type Difficulty struct {
 	Name      string `json:"name"`
 	Kbps      int    `json:"kbps"`
 	Questions int    `json:"questions"`
+	// RankWeight is what a perfect attempt is worth in the rating (UserRank);
+	// 0 leaves the level out. Hidden from players along with the points.
+	RankWeight float64 `json:"-"`
 }
 
 // Bitrate is the ffmpeg -b:a value, e.g. "128k"; also part of the clip file name.
 func (d Difficulty) Bitrate() string { return strconv.Itoa(d.Kbps) + "k" }
 
 // Difficulties, easiest first. Names must match the CHECK on attempts.difficulty.
-var Difficulties = []Difficulty{{"easy", 32, 5}, {"medium", 128, 12}, {"hard", 320, 12}}
+// Hard counts double in the rating: anything above chance at 320 kbps is rare.
+var Difficulties = []Difficulty{{"easy", 32, 5, 0}, {"medium", 128, 12, 1}, {"hard", 320, 12, 2}}
 
 const DefaultDifficulty = "medium"
 

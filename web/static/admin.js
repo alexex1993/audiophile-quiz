@@ -25,9 +25,11 @@ async function init() {
   }
 
   app.innerHTML = `
+    <div id="maint-banner"></div>
     <div class="row" style="margin-bottom:24px">
       <div><div class="eyebrow">${t("Управление", "Management")}</div><h1 style="margin:4px 0 0;letter-spacing:-0.02em">${t("Библиотека и результаты", "Library and results")}</h1></div>
       <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="maint-btn"></button>
       <div class="tabs"><button class="active" data-tab="tracks">${t("Треки", "Tracks")}</button><button data-tab="users">${t("Пользователи", "Users")}</button><button data-tab="stats">${t("Статистика", "Statistics")}</button></div>
     </div>
     <section id="tab-tracks"></section>
@@ -41,8 +43,37 @@ async function init() {
     if (b.dataset.tab === "users") loadUsers();
     if (b.dataset.tab === "stats") loadStats();
   }));
+  renderMaintenance(me.maintenance);
   renderUploader();
   loadTracks();
+}
+
+// ---------- maintenance ----------
+
+// renderMaintenance shows the maintenance switch; while it is on the site is
+// closed to everyone but admins.
+function renderMaintenance(on) {
+  const btn = document.getElementById("maint-btn");
+  btn.className = on ? "btn btn-sm" : "btn btn-ghost btn-sm";
+  btn.textContent = on ? t("Открыть сайт", "Reopen the site") : `🛠 ${t("Техническое обслуживание", "Maintenance")}`;
+  document.getElementById("maint-banner").innerHTML = on
+    ? `<div class="notice warn" style="margin-bottom:20px">${t("Сайт закрыт на техническое обслуживание: посетители видят заглушку, работают только админка и сам тест для администраторов.",
+      "The site is closed for maintenance: visitors see a stub page; only the admin page and the test for admins keep working.")}</div>`
+    : "";
+  btn.onclick = async () => {
+    if (!on && !confirm(t("Закрыть сайт на техническое обслуживание? Посетители увидят заглушку, незавершённые попытки сохранятся.",
+      "Close the site for maintenance? Visitors will see a stub page; unfinished attempts are kept."))) return;
+    btn.disabled = true;
+    try {
+      const res = await api("/api/admin/maintenance", { method: "PUT", json: { enabled: !on } });
+      renderMaintenance(res.enabled);
+      toast(res.enabled ? t("Сайт закрыт на обслуживание", "The site is closed for maintenance") : t("Сайт снова открыт", "The site is open again"));
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }
 
 // ---------- upload ----------

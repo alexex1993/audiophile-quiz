@@ -48,6 +48,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		d.Questions = min(d.Questions, tracks)
 		levels[i] = d
 	}
+	// Guests can't play rated levels. Admins are left out of everyone else's
+	// rating but see where they would stand.
+	var rank *store.Rank
+	if !user.Guest {
+		if rank, err = s.store.UserRank(r.Context(), user.ID, s.cfg.AdminEmailList()); err != nil {
+			writeStoreError(w, r, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"user":             user,
 		"is_admin":         !user.Guest && s.cfg.IsAdmin(user.Email),
@@ -55,6 +64,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"quota":            quota,
 		"tracks_available": tracks,
 		"difficulties":     levels,
+		"rank":             rank, // own place only, never points or other players
+		"maintenance":      s.maintenance.Load(),
 	})
 }
 
