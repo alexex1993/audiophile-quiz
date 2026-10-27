@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +31,7 @@ const (
 var (
 	ErrLimitReached  = errors.New("daily attempt limit reached")
 	ErrNoTracks      = errors.New("track library is empty")
+	ErrClipsSyncing  = errors.New("this level's clips are still being re-encoded")
 	ErrAttemptClosed = errors.New("attempt is already finished")
 	ErrNotAllAnswers = errors.New("not every question is answered")
 )
@@ -43,6 +46,9 @@ type Difficulty struct {
 	// RankWeight is what a perfect attempt is worth in the rating (UserRank);
 	// 0 leaves the level out. Hidden from players along with the points.
 	RankWeight float64 `json:"-"`
+	// Syncing (in /api/me only): SyncClips hasn't yet made this level's
+	// clip for enough tracks, so an attempt can't be started.
+	Syncing bool `json:"syncing,omitempty"`
 }
 
 // Bitrate is the ffmpeg -b:a value, e.g. "128k"; also part of the clip file name.
@@ -50,7 +56,11 @@ func (d Difficulty) Bitrate() string { return strconv.Itoa(d.Kbps) + "k" }
 
 // Difficulties, easiest first. Names must match the CHECK on attempts.difficulty.
 // Hard counts double in the rating: anything above chance at 320 kbps is rare.
-var Difficulties = []Difficulty{{"easy", 32, 5, 0}, {"medium", 128, 12, 1}, {"hard", 320, 12, 2}}
+var Difficulties = []Difficulty{
+	{Name: "easy", Kbps: 32, Questions: 5, RankWeight: 0},
+	{Name: "medium", Kbps: 128, Questions: 12, RankWeight: 1},
+	{Name: "hard", Kbps: 320, Questions: 12, RankWeight: 2},
+}
 
 const DefaultDifficulty = "medium"
 
@@ -74,6 +84,14 @@ func Bitrates() []string {
 		out[i] = d.Bitrate()
 	}
 	return out
+}
+
+// ClipBitrates is the aac_bitrate of a track whose clips match Difficulties.
+func ClipBitrates() string { return strings.Join(Bitrates(), "/") }
+
+// HasClip reports whether a track with aac_bitrate has the clip of bitrate.
+func HasClip(aacBitrate, bitrate string) bool {
+	return slices.Contains(strings.Split(aacBitrate, "/"), bitrate)
 }
 
 // answerKinds maps each answer option to the pair of files it describes.
@@ -183,7 +201,11 @@ func (s *Store) StartAttempt(ctx context.Context, userID int64, limit int, diffi
 			return ErrLimitReached
 		}
 
-		rows, err := tx.Query(ctx, `SELECT id, artist, title FROM tracks WHERE active ORDER BY random() LIMIT $1`, level.Questions)
+		// Only tracks that have this level's clip: SyncClips may still be re-encoding others.
+		rows, err := tx.Query(ctx, `
+			SELECT id, artist, title FROM tracks WHERE active AND $2 = ANY(string_to_array(aac_bitrate, '/'))
+			ORDER BY random() LIMIT $1`,
+			level.Questions, level.Bitrate())
 		if err != nil {
 			return err
 		}
@@ -198,8 +220,20 @@ func (s *Store) StartAttempt(ctx context.Context, userID int64, limit int, diffi
 		if err != nil {
 			return err
 		}
-		if len(picks) == 0 {
-			return ErrNoTracks
+		if len(picks) < level.Questions {
+			// Fewer tracks than the level asks for: fine if that's the whole
+			// library, but not while some still lack this level's clip — the
+			// attempt would be shorter than it should, yet count in full.
+			var active int
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM tracks WHERE active`).Scan(&active); err != nil {
+				return err
+			}
+			if active == 0 {
+				return ErrNoTracks
+			}
+			if len(picks) < min(level.Questions, active) {
+				return ErrClipsSyncing
+			}
 		}
 
 		if err := tx.QueryRow(ctx, `INSERT INTO attempts (user_id, total, difficulty) VALUES ($1, $2, $3) RETURNING id`,
@@ -346,6 +380,7 @@ func (s *Store) UserAttempts(ctx context.Context, userID int64) ([]*Attempt, err
 
 type AudioRef struct {
 	StorageDir string
+	AACBitrate string
 	Kind       string
 	Difficulty string
 	FileSize   int64
@@ -355,12 +390,12 @@ type AudioRef struct {
 func (s *Store) AudioByToken(ctx context.Context, token string, userID int64) (*AudioRef, error) {
 	ref := &AudioRef{}
 	err := s.db.QueryRow(ctx, `
-		SELECT t.storage_dir, CASE WHEN q.token_a = $1 THEN q.kind_a ELSE q.kind_b END, a.difficulty, t.file_size
+		SELECT t.storage_dir, t.aac_bitrate, CASE WHEN q.token_a = $1 THEN q.kind_a ELSE q.kind_b END, a.difficulty, t.file_size
 		FROM attempt_questions q
 		JOIN attempts a ON a.id = q.attempt_id
 		JOIN tracks t ON t.id = q.track_id
 		WHERE (q.token_a = $1 OR q.token_b = $1) AND a.user_id = $2`, token, userID,
-	).Scan(&ref.StorageDir, &ref.Kind, &ref.Difficulty, &ref.FileSize)
+	).Scan(&ref.StorageDir, &ref.AACBitrate, &ref.Kind, &ref.Difficulty, &ref.FileSize)
 	return ref, notFound(err)
 }
 

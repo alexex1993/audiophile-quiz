@@ -16,13 +16,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -156,11 +158,10 @@ func Process(ctx context.Context, src, outDir string, startSeconds float64, clip
 
 	clips := []string{lossless}
 	for _, bitrate := range bitrates {
-		encoded, err := encodeAAC(ctx, outDir, info, nSamples, output, bitrate)
-		if err != nil {
-			return nil, err
-		}
-		clips = append(clips, encoded)
+		clips = append(clips, filepath.Join(outDir, EncodedFile(bitrate)))
+	}
+	if err := encodeAACs(ctx, outDir, info, nSamples, output, bitrates); err != nil {
+		return nil, err
 	}
 
 	size, err := equalizeFLACSizes(clips...)
@@ -170,12 +171,19 @@ func Process(ctx context.Context, src, outDir string, startSeconds float64, clip
 	return &Result{Info: *info, FileSize: size}, nil
 }
 
-// Reencode brings a clip directory made by Process in line with bitrates:
-// missing EncodedFiles are made from its LosslessFile exactly as Process
-// would, ones for other bitrates are removed, and all clips are padded to
-// equal size again. It returns that size.
-func Reencode(ctx context.Context, dir string, bitrates []string) (int64, error) {
-	lossless := filepath.Join(dir, LosslessFile)
+// Reencode makes in dstDir the clip directory Process would make for bitrates,
+// from the one in srcDir: its LosslessFile, and the EncodedFiles it already
+// has for these bitrates, are copied; the missing ones are encoded from the
+// LosslessFile; all are padded to equal size again, which is returned.
+// srcDir is only read, so its clips can be served meanwhile.
+func Reencode(ctx context.Context, srcDir, dstDir string, bitrates []string) (int64, error) {
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return 0, err
+	}
+	lossless := filepath.Join(dstDir, LosslessFile)
+	if err := copyFile(filepath.Join(srcDir, LosslessFile), lossless); err != nil {
+		return 0, err
+	}
 	info, err := Probe(ctx, lossless)
 	if err != nil {
 		return 0, err
@@ -192,32 +200,39 @@ func Reencode(ctx context.Context, dir string, bitrates []string) (int64, error)
 	if nSamples == 0 {
 		return 0, fmt.Errorf("%s: STREAMINFO has no sample count", lossless)
 	}
-	output := flacOutput(info, sampleFmt)
 
 	clips := []string{lossless}
+	var missing []string
 	for _, bitrate := range bitrates {
-		encoded := filepath.Join(dir, EncodedFile(bitrate))
-		if _, err := os.Stat(encoded); errors.Is(err, os.ErrNotExist) {
-			if encoded, err = encodeAAC(ctx, dir, info, nSamples, output, bitrate); err != nil {
-				return 0, err
-			}
+		encoded := filepath.Join(dstDir, EncodedFile(bitrate))
+		clips = append(clips, encoded)
+		if err := copyFile(filepath.Join(srcDir, EncodedFile(bitrate)), encoded); errors.Is(err, os.ErrNotExist) {
+			missing = append(missing, bitrate)
 		} else if err != nil {
 			return 0, err
 		}
-		clips = append(clips, encoded)
 	}
-	stale, err := filepath.Glob(filepath.Join(dir, EncodedFile("*")))
-	if err != nil {
+	if err := encodeAACs(ctx, dstDir, info, nSamples, flacOutput(info, sampleFmt), missing); err != nil {
 		return 0, err
 	}
-	for _, p := range stale {
-		if !slices.Contains(clips, p) {
-			if err := os.Remove(p); err != nil {
-				return 0, err
-			}
-		}
-	}
 	return equalizeFLACSizes(clips...)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // flacOutput is the ffmpeg output options of every clip: same encoder
@@ -232,19 +247,28 @@ func flacOutput(info *Info, sampleFmt string) []string {
 	return output
 }
 
-// encodeAAC makes EncodedFile(bitrate) in outDir from its LosslessFile and
-// returns its path.
-func encodeAAC(ctx context.Context, outDir string, info *Info, nSamples int64, output []string, bitrate string) (string, error) {
+// encodeAACs makes EncodedFile(bitrate) in outDir for each of bitrates, all
+// at once: the round trips are independent single-threaded ffmpeg runs.
+func encodeAACs(ctx context.Context, outDir string, info *Info, nSamples int64, output []string, bitrates []string) error {
+	g, ctx := errgroup.WithContext(ctx)
+	for _, bitrate := range bitrates {
+		g.Go(func() error { return encodeAAC(ctx, outDir, info, nSamples, output, bitrate) })
+	}
+	return g.Wait()
+}
+
+// encodeAAC makes EncodedFile(bitrate) in outDir from its LosslessFile.
+func encodeAAC(ctx context.Context, outDir string, info *Info, nSamples int64, output []string, bitrate string) error {
 	// 2. Encode the very same cut to AAC. The MP4 container records the
 	//    encoder delay in an edit list, so decoding stays sample-aligned.
-	aac := filepath.Join(outDir, "tmp.m4a")
+	aac := filepath.Join(outDir, "tmp_"+bitrate+".m4a")
 	defer os.Remove(aac)
 	args := []string{"-i", filepath.Join(outDir, LosslessFile), "-c:a", "aac", "-b:a", bitrate}
 	if info.SampleRate > maxAACSampleRate {
 		args = append(args, "-ar", "48000")
 	}
 	if err := ffmpeg(ctx, append(args, aac)...); err != nil {
-		return "", fmt.Errorf("AAC %s encode: %w", bitrate, err)
+		return fmt.Errorf("AAC %s encode: %w", bitrate, err)
 	}
 
 	// 3. Decode back to FLAC with exactly the same format and length.
@@ -252,9 +276,9 @@ func encodeAAC(ctx context.Context, outDir string, info *Info, nSamples int64, o
 	args = []string{"-i", aac,
 		"-af", fmt.Sprintf("aresample=%d,apad=whole_len=%d,atrim=end_sample=%d", info.SampleRate, nSamples, nSamples)}
 	if err := ffmpeg(ctx, append(append(args, output...), encoded)...); err != nil {
-		return "", fmt.Errorf("AAC %s decode: %w", bitrate, err)
+		return fmt.Errorf("AAC %s decode: %w", bitrate, err)
 	}
-	return encoded, nil
+	return nil
 }
 
 // flacSampleFmt picks the FLAC encoder sample format that preserves the

@@ -11,12 +11,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/alexex/audiophile-quiz/internal/audio"
 	"github.com/alexex/audiophile-quiz/internal/store"
+	"golang.org/x/sync/errgroup"
 )
 
 func (s *Server) handleListTracks(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +134,7 @@ func (s *Server) handleUploadTrack(w http.ResponseWriter, r *http.Request) {
 		Channels:       res.Info.Channels,
 		BitDepth:       res.Info.BitDepth,
 		PCMCodec:       "flac",
-		AACBitrate:     clipBitrates(),
+		AACBitrate:     store.ClipBitrates(),
 		StorageDir:     storageDir,
 		FileSize:       res.FileSize,
 	}
@@ -169,16 +173,12 @@ func (s *Server) handleDeleteTrack(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, tr(r, "неверный id", "invalid id"))
 		return
 	}
-	t, err := s.store.GetTrack(r.Context(), id)
+	storageDir, err := s.store.DeleteTrack(r.Context(), id)
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	if err := s.store.DeleteTrack(r.Context(), id); err != nil {
-		writeStoreError(w, r, err)
-		return
-	}
-	if err := os.RemoveAll(filepath.Join(s.cfg.DataDir, t.StorageDir)); err != nil {
+	if err := os.RemoveAll(filepath.Join(s.cfg.DataDir, storageDir)); err != nil {
 		slog.Warn("remove track files", "id", id, "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -297,34 +297,85 @@ func randomHex() string {
 	return hex.EncodeToString(b)
 }
 
-// clipBitrates is the aac_bitrate of a track whose clips match store.Difficulties.
-func clipBitrates() string { return strings.Join(store.Bitrates(), "/") }
+// SyncClips re-encodes, in the background, the clips of every track made for
+// other bitrates than store.Difficulties now has, from the track's own
+// lossless clip, a few tracks at a time. Until a track is done, new attempts
+// skip it at the levels it lacks a clip for (StartAttempt) and
+// handleQuizAudio answers 503 for those clips. Tracks that fail are logged
+// and tried again later, less and less often, until ctx ends.
+func (s *Server) SyncClips(ctx context.Context) {
+	// Old clip dirs are removed a little after the switch, so requests that
+	// looked one up just before it can still open their file.
+	var removals sync.WaitGroup
+	defer removals.Wait()
+	for retry := time.Minute; ; retry = min(2*retry, time.Hour) {
+		if s.syncClips(ctx, &removals) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(retry):
+		}
+	}
+}
 
-// SyncClips re-encodes the clips of every track made for other bitrates than
-// store.Difficulties now has, from the track's own lossless clip. Called at
-// startup, before anything is served. A track that fails is logged and left as is.
-func (s *Server) SyncClips(ctx context.Context) error {
+// syncClips makes one pass over the tracks and reports whether all are done.
+func (s *Server) syncClips(ctx context.Context, removals *sync.WaitGroup) bool {
 	tracks, err := s.store.ListTracks(ctx)
 	if err != nil {
-		return err
+		slog.Warn("sync clips", "err", err)
+		return false
 	}
-	want := clipBitrates()
+	want := store.ClipBitrates()
+	var g errgroup.Group
+	// Leave CPU for the requests being served meanwhile. Usually one level
+	// changes, so each track runs a single ffmpeg round trip.
+	g.SetLimit(max(1, runtime.NumCPU()/2))
+	var failed atomic.Bool
 	for _, t := range tracks {
-		if t.AACBitrate == want {
-			continue
+		if t.AACBitrate != want {
+			g.Go(func() error {
+				if !s.syncTrack(ctx, t, want, removals) {
+					failed.Store(true)
+				}
+				return nil
+			})
 		}
-		size, err := audio.Reencode(ctx, filepath.Join(s.cfg.DataDir, t.StorageDir), store.Bitrates())
-		if err == nil {
-			err = s.store.UpdateTrackClips(ctx, t.ID, want, size)
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			slog.Warn("re-encode track", "id", t.ID, "title", t.Title, "from", t.AACBitrate, "err", err)
-			continue
-		}
-		slog.Info("track re-encoded", "id", t.ID, "title", t.Title, "from", t.AACBitrate, "to", want)
 	}
-	return nil
+	g.Wait()
+	return !failed.Load()
+}
+
+// syncTrack re-encodes a track into a new directory and switches the track
+// to it in one UPDATE, so the clips being served stay consistent throughout.
+// It reports false if the track should be tried again.
+func (s *Server) syncTrack(ctx context.Context, t *store.Track, want string, removals *sync.WaitGroup) bool {
+	storageDir := filepath.Join("audio", randomHex())
+	dir := filepath.Join(s.cfg.DataDir, storageDir)
+	size, err := audio.Reencode(ctx, filepath.Join(s.cfg.DataDir, t.StorageDir), dir, store.Bitrates())
+	if err == nil {
+		err = s.store.UpdateTrackClips(ctx, t.ID, want, storageDir, size)
+	}
+	if err != nil {
+		os.RemoveAll(dir)
+		if errors.Is(err, store.ErrNotFound) {
+			return true // deleted meanwhile
+		}
+		if ctx.Err() == nil {
+			slog.Warn("re-encode track", "id", t.ID, "title", t.Title, "from", t.AACBitrate, "err", err)
+		}
+		return false
+	}
+	slog.Info("track re-encoded", "id", t.ID, "title", t.Title, "from", t.AACBitrate, "to", want)
+	removals.Go(func() {
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Minute):
+		}
+		if err := os.RemoveAll(filepath.Join(s.cfg.DataDir, t.StorageDir)); err != nil {
+			slog.Warn("remove old clips", "id", t.ID, "dir", t.StorageDir, "err", err)
+		}
+	})
+	return true
 }

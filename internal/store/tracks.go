@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type Track struct {
@@ -88,22 +90,44 @@ func (s *Store) UpdateTrack(ctx context.Context, id int64, artist, title string,
 	return err
 }
 
-// UpdateTrackClips records that a track's clips were re-encoded for other bitrates.
-func (s *Store) UpdateTrackClips(ctx context.Context, id int64, aacBitrate string, fileSize int64) error {
-	_, err := s.db.Exec(ctx, `UPDATE tracks SET aac_bitrate = $2, file_size = $3 WHERE id = $1`, id, aacBitrate, fileSize)
-	return err
-}
-
-func (s *Store) DeleteTrack(ctx context.Context, id int64) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM tracks WHERE id = $1`, id)
+// UpdateTrackClips switches a track to clips re-encoded for other bitrates
+// in a new storage directory.
+func (s *Store) UpdateTrackClips(ctx context.Context, id int64, aacBitrate, storageDir string, fileSize int64) error {
+	tag, err := s.db.Exec(ctx, `UPDATE tracks SET aac_bitrate = $2, storage_dir = $3, file_size = $4 WHERE id = $1`,
+		id, aacBitrate, storageDir, fileSize)
 	if err == nil && tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
 	return err
 }
 
-func (s *Store) CountActiveTracks(ctx context.Context) (int, error) {
+// DeleteTrack deletes a track and returns its storage_dir as of the delete,
+// which SyncClips may have changed since the track was last read.
+func (s *Store) DeleteTrack(ctx context.Context, id int64) (string, error) {
+	var storageDir string
+	err := s.db.QueryRow(ctx, `DELETE FROM tracks WHERE id = $1 RETURNING storage_dir`, id).Scan(&storageDir)
+	return storageDir, notFound(err)
+}
+
+// CountPlayableTracks counts the active tracks and, per bitrate, those that
+// have its clip; while SyncClips runs, some lack the clip of a changed one.
+func (s *Store) CountPlayableTracks(ctx context.Context) (int, map[string]int, error) {
+	var active int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM tracks WHERE active`).Scan(&active); err != nil {
+		return 0, nil, err
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT b, count(*)::int FROM tracks, unnest(string_to_array(aac_bitrate, '/')) b
+		WHERE active GROUP BY b`)
+	if err != nil {
+		return 0, nil, err
+	}
+	counts := map[string]int{}
+	var b string
 	var n int
-	err := s.db.QueryRow(ctx, `SELECT count(*) FROM tracks WHERE active`).Scan(&n)
-	return n, err
+	_, err = pgx.ForEachRow(rows, []any{&b, &n}, func() error {
+		counts[b] = n
+		return nil
+	})
+	return active, counts, err
 }

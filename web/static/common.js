@@ -146,22 +146,66 @@ async function logout() {
 const ICON_PLAY = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.6-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>`;
 const ICON_PAUSE = `<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>`;
 
+// Clip downloads one audio file in full into a blob URL, which done resolves
+// to. It starts at once, so a caller can create one ahead of time to prefetch
+// it; the caller owns it and frees it with release().
+class Clip {
+  constructor(src) {
+    this.loaded = 0;
+    this.total = 0;
+    this.url = null;
+    this.failed = false;
+    this.listeners = new Set(); // called on every downloaded chunk
+    this.abort = new AbortController();
+    this.done = this.download(src);
+    this.done.catch(() => (this.failed = true));
+  }
+
+  async download(src) {
+    const res = await fetch(src, { signal: this.abort.signal });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 503 && data.maintenance) location.reload();
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    this.total = Number(res.headers.get("Content-Length")) || 0;
+    const reader = res.body.getReader();
+    const chunks = [];
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      this.loaded += value.length;
+      for (const fn of this.listeners) fn();
+    }
+    this.url = URL.createObjectURL(new Blob(chunks, { type: res.headers.get("Content-Type") || "" }));
+    return this.url;
+  }
+
+  release() {
+    this.abort.abort();
+    this.listeners.clear();
+    if (this.url) URL.revokeObjectURL(this.url);
+  }
+}
+
 // PlayerGroup keeps several clips of the same excerpt in sync: starting one
 // pauses the others and continues from the same moment, which makes quick
 // A/B switching seamless.
 //
 // All clips are downloaded in full, behind one shared progress bar, before any
 // of them can play: the clips are FLACs of equal size but different bitrate,
-// so per-clip buffering would hint at which one went through AAC.
+// so per-clip buffering would hint at which one went through AAC. The group
+// takes Clips from its caller (they may be prefetched already) and leaves
+// releasing them to it.
 class PlayerGroup {
   constructor() {
     this.players = [];
     this.position = 0;
     this.ready = false;
-    this.abort = new AbortController();
   }
 
-  add(src, label, sub = "", key = "") {
+  add(clip, label, sub = "", key = "") {
     const audio = new Audio();
     audio.preload = "auto";
     const bars = waveBars(7); // identical decoration on every player
@@ -177,9 +221,13 @@ class PlayerGroup {
         <div class="wave"><div class="bars">${bars}</div><div class="bars fill">${bars}</div><div class="loading-bar"></div></div>
         <div class="player-time"><span class="cur">0:00</span><span class="dur">0:30</span></div>
       </div>`);
-    const p = { audio, el, btn: el.querySelector(".play-btn"), fill: el.querySelector(".bars.fill"), load: el.querySelector(".loading-bar"), loaded: 0, total: 0, url: null, playing: false };
+    const p = { clip, audio, el, btn: el.querySelector(".play-btn"), fill: el.querySelector(".bars.fill"), load: el.querySelector(".loading-bar"), playing: false };
+    p.progress = () => this.renderLoading();
+    clip.listeners.add(p.progress);
     this.players.push(p);
-    this.download(p, src);
+    clip.done.then(() => this.start(), (e) => {
+      if (e.name !== "AbortError" && this.players.includes(p)) toast(t("Не удалось загрузить аудио: ", "Failed to load audio: ") + e.message, true);
+    });
 
     p.btn.addEventListener("click", () => this.toggle(p));
     el.querySelector(".wave").addEventListener("click", (e) => {
@@ -200,32 +248,16 @@ class PlayerGroup {
       this.position = 0;
       this.stop();
     });
+    this.renderLoading(); // a prefetched clip may be partly downloaded already
     return el;
   }
 
-  async download(p, src) {
-    try {
-      const res = await fetch(src, { signal: this.abort.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      p.total = Number(res.headers.get("Content-Length")) || 0;
-      const reader = res.body.getReader();
-      const chunks = [];
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        p.loaded += value.length;
-        this.renderLoading();
-      }
-      p.url = URL.createObjectURL(new Blob(chunks, { type: res.headers.get("Content-Type") || "" }));
-    } catch (e) {
-      if (e.name !== "AbortError") toast(t("Не удалось загрузить аудио: ", "Failed to load audio: ") + e.message, true);
-      return;
-    }
-    if (!this.players.every((x) => x.url)) return;
+  // start enables playback once every clip is downloaded.
+  start() {
+    if (this.ready || !this.players.length || !this.players.every((x) => x.clip.url)) return;
     this.ready = true;
     for (const x of this.players) {
-      x.audio.src = x.url;
+      x.audio.src = x.clip.url;
       x.el.classList.remove("loading");
     }
     this.renderLoading();
@@ -235,10 +267,10 @@ class PlayerGroup {
   renderLoading() {
     let loaded = 0, total = 0;
     for (const p of this.players) {
-      loaded += p.loaded;
-      total += p.total;
+      loaded += p.clip.loaded;
+      total += p.clip.total;
     }
-    const known = this.players.every((p) => p.total);
+    const known = this.players.every((p) => p.clip.total);
     const pct = this.ready ? 100 : known ? (loaded / total) * 100 : 0;
     for (const p of this.players) p.load.style.width = `${pct}%`;
   }
@@ -292,12 +324,11 @@ class PlayerGroup {
   }
 
   destroy() {
-    this.abort.abort();
     for (const p of this.players) {
+      p.clip.listeners.delete(p.progress);
       p.audio.pause();
       p.audio.removeAttribute("src");
       p.audio.load();
-      if (p.url) URL.revokeObjectURL(p.url);
     }
     this.players = [];
     this.active = null;

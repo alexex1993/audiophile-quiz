@@ -14,6 +14,8 @@ const GOOGLE_ICON = `<svg viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5
 
 // Guests (no Google account) may only play the warm-up level.
 const guestLocked = (name) => me?.user.guest && name !== me.guest_difficulty;
+// The server is still re-encoding this level's clips, so it can't be started yet.
+const levelSyncing = (name) => !!me?.difficulties?.find((l) => l.name === name)?.syncing;
 
 function levelPill(name) {
   return `<span class="pill level-pill level-${esc(name)}">${esc(levelTitle(name))} · ${levelKbps(me?.difficulties, name)} kbps</span>`;
@@ -24,18 +26,25 @@ const nav = document.getElementById("nav");
 let me = null;
 let group = null;
 let keyHandler = null;
+let routeGen = 0; // bumped on every route(), so a render that outlived its page can tell
+let quizClips = null; // token → Clip of the quiz page: the current question and the prefetched next one
+const answerSaves = new Map(); // "attempt:position" → answers being saved in the background
 
 window.addEventListener("hashchange", route);
 route();
 
 async function route() {
+  const gen = ++routeGen;
   group?.destroy();
   group = null;
+  for (const c of quizClips?.values() ?? []) c.release();
+  quizClips = null;
   if (keyHandler) document.removeEventListener("keydown", keyHandler);
   keyHandler = null;
 
   try {
     me = await api("/api/me");
+    if (gen !== routeGen) return;
   } catch (e) {
     if (e.status === 401) return renderLanding(await api("/api/config").catch(() => null));
     return renderError(e);
@@ -174,6 +183,8 @@ async function renderHome() {
 
   // Unless something blocks the start, the note follows the selected level.
   const levelNote = (name) => {
+    if (levelSyncing(name)) return t("Клипы этого уровня сейчас обновляются — попробуйте через несколько минут.",
+      "This level's clips are being updated — try again in a few minutes.");
     if (guestLocked(name)) return t("Средний и сложный уровни открываются после входа через Google. Результаты разминки сохранятся в истории.",
       "The medium and hard levels open once you sign in with Google. Your warm-up results stay in your history.");
     const n = levels.find((l) => l.name === name)?.questions ?? 0;
@@ -250,7 +261,7 @@ async function renderHome() {
   const updateStart = () => {
     const locked = !unfinished && guestLocked(level);
     startBtn.classList.toggle("btn-google", locked);
-    startBtn.disabled = !locked && !canStart;
+    startBtn.disabled = !locked && !(canStart && (unfinished || !levelSyncing(level)));
     startBtn.innerHTML = locked ? `${GOOGLE_ICON} ${t("Войти через Google", "Sign in with Google")}`
       : unfinished ? t("Продолжить тест", "Continue the test") : t("Начать тест", "Start the test");
   };
@@ -301,21 +312,75 @@ function levelAbout(l) {
 
 // ---------- quiz ----------
 
+// saveAnswer records an answer at once and sends it in the background, so the
+// next question shows without waiting for the server. Saves of one question
+// go in order; network and server errors are retried, and if the answer still
+// can't be saved it is taken back, so the question counts as open again.
+function saveAnswer(attemptID, q, answer) {
+  q.user_answer = answer;
+  const key = `${attemptID}:${q.position}`;
+  const send = async () => {
+    for (let i = 0; ; i++) {
+      try {
+        await api(`/api/quiz/${attemptID}/answer`, { method: "POST", json: { position: q.position, answer } });
+        q.saved = answer;
+        return;
+      } catch (err) {
+        if ((err.status && err.status < 500) || i === 3) {
+          if (q.user_answer === answer) q.user_answer = q.saved;
+          toast(t("Ответ не сохранён: ", "Answer not saved: ") + err.message, true);
+          return;
+        }
+        await new Promise((res) => setTimeout(res, 1000 * 2 ** i));
+      }
+    }
+  };
+  const chain = (answerSaves.get(key) || Promise.resolve()).then(send);
+  answerSaves.set(key, chain);
+  chain.then(() => answerSaves.get(key) === chain && answerSaves.delete(key));
+}
+
 async function renderQuiz(id) {
+  const gen = routeGen;
+  await Promise.all(answerSaves.values()); // so the attempt below includes them; may take a while with retries
   const attempt = await api(`/api/quiz/${id}`);
+  if (gen !== routeGen) return; // the user went elsewhere meanwhile
   if (attempt.finished_at) {
     location.hash = `#/result/${id}`;
     return;
   }
   const qs = attempt.questions;
+  for (const q of qs) q.saved = q.user_answer;
   const opts = options(levelKbps(me.difficulties, attempt.difficulty));
   let idx = qs.findIndex((q) => !q.user_answer);
   if (idx < 0) idx = qs.length - 1;
 
+  // The question "Answer" leads to once the current one is answered; -1 when it completes the attempt.
+  const nextIndex = () => idx + 1 < qs.length && !qs[idx + 1].user_answer ? idx + 1 : qs.findIndex((x, i) => i !== idx && !x.user_answer);
+
+  const clips = (quizClips = new Map());
+  const clip = (token) => {
+    let c = clips.get(token);
+    if (!c || c.failed) {
+      c?.release();
+      clips.set(token, (c = new Clip(`/api/audio/${token}`)));
+    }
+    return c;
+  };
+
   const show = () => {
     group?.destroy();
-    group = new PlayerGroup();
+    const g = (group = new PlayerGroup());
     const q = qs[idx];
+    const next = qs[nextIndex()];
+    // Keep only this question's clips and the next one's; the rest are freed.
+    const keep = [q.token_a, q.token_b, next?.token_a, next?.token_b];
+    for (const [token, c] of clips) {
+      if (!keep.includes(token)) {
+        c.release();
+        clips.delete(token);
+      }
+    }
     const answered = qs.filter((x) => x.user_answer).length;
     let selected = q.user_answer || 0;
     const willFinish = qs.every((x, i) => i === idx || x.user_answer);
@@ -350,8 +415,23 @@ async function renderQuiz(id) {
       </p>`;
 
     const players = app.querySelector("#players");
-    players.append(group.add(`/api/audio/${q.token_a}`, t("Первый файл", "First clip"), t("30 сек", "30 s"), "A"));
-    players.append(group.add(`/api/audio/${q.token_b}`, t("Второй файл", "Second clip"), t("30 сек", "30 s"), "B"));
+    const a = clip(q.token_a), b = clip(q.token_b);
+    players.append(group.add(a, t("Первый файл", "First clip"), t("30 сек", "30 s"), "A"));
+    players.append(group.add(b, t("Второй файл", "Second clip"), t("30 сек", "30 s"), "B"));
+    // Prefetch the next question while this one is being listened to; only
+    // after this pair is in, so the two don't share the bandwidth. If the pair
+    // fails (e.g. a clip still being re-encoded), offer to load it again.
+    Promise.all([a.done, b.done]).then(() => {
+      if (group === g && next) {
+        clip(next.token_a);
+        clip(next.token_b);
+      }
+    }, () => {
+      if (group !== g) return;
+      const retry = h(`<p class="center"><button class="btn btn-ghost btn-sm">${t("Загрузить ещё раз", "Load again")}</button></p>`);
+      retry.querySelector("button").onclick = () => group === g && show();
+      players.after(retry);
+    });
 
     const nextBtn = app.querySelector("#next");
     const select = (n) => {
@@ -361,23 +441,27 @@ async function renderQuiz(id) {
     };
     app.querySelectorAll(".option").forEach((b) => (b.onclick = () => select(Number(b.dataset.n))));
 
-    const submit = async () => {
+    const submit = () => {
       if (!selected || nextBtn.disabled) return;
+      if (q.user_answer !== selected) saveAnswer(id, q, selected);
+      const n = nextIndex();
+      if (n < 0) return finish();
+      idx = n;
+      show();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    };
+    const finish = async () => {
       nextBtn.disabled = true;
       try {
-        if (q.user_answer !== selected) {
-          await api(`/api/quiz/${id}/answer`, { method: "POST", json: { position: q.position, answer: selected } });
-          q.user_answer = selected;
+        await Promise.all(answerSaves.values());
+        if (group !== g) return; // the user moved to another question or page meanwhile
+        const open = qs.findIndex((x) => !x.user_answer);
+        if (open >= 0) { // an answer could not be saved
+          idx = open;
+          return show();
         }
-        const firstOpen = qs.findIndex((x) => !x.user_answer);
-        if (firstOpen < 0) {
-          await api(`/api/quiz/${id}/finish`, { method: "POST" });
-          location.hash = `#/result/${id}`;
-          return;
-        }
-        idx = idx + 1 < qs.length && !qs[idx + 1].user_answer ? idx + 1 : firstOpen;
-        show();
-        window.scrollTo({ top: 0, behavior: "smooth" });
+        await api(`/api/quiz/${id}/finish`, { method: "POST" });
+        if (group === g) location.hash = `#/result/${id}`;
       } catch (err) {
         toast(err.message, true);
         nextBtn.disabled = false;
@@ -448,7 +532,7 @@ function nextLevelsCard() {
         "The service works. Find out whether you can hear the difference where it's actually subtle.")}</p>
       ${note ? `<p class="faint" style="font-size:14px">${esc(note)}</p>` : ""}
       <div class="grid grid-2">${levels.map((l) => `
-        <button class="option level" data-level="${esc(l.name)}" ${canStart ? "" : "disabled"}>
+        <button class="option level" data-level="${esc(l.name)}" ${canStart && (q.unfinished_attempt_id || !l.syncing) ? "" : "disabled"}>
           <span class="num">${l.kbps}</span><span>${t("Пройти", "Take")} ${esc(levelTitle(l.name).toLowerCase())} ${t("уровень", "level")}<small>AAC ${l.kbps} kbps · ${esc(LEVEL_TEXT[l.name]?.hint || "")}</small></span>
         </button>`).join("")}
       </div>

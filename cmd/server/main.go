@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 	_ "time/tzdata" // the runtime image has no zoneinfo; used to validate stats time zones
@@ -48,25 +49,28 @@ func run() error {
 	if err := srv.LoadMaintenance(ctx); err != nil {
 		return err
 	}
-	if err := srv.SyncClips(ctx); err != nil {
-		return err
-	}
-	go srv.CleanupLoop(ctx)
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	go func() {
+	// Background work ends with ctx; the store is closed only after it.
+	var bg sync.WaitGroup
+	bg.Go(func() { srv.SyncClips(ctx) })
+	bg.Go(func() { srv.CleanupLoop(ctx) })
+	bg.Go(func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		httpSrv.Shutdown(shutdownCtx)
-	}()
+	})
 
 	slog.Info("listening", "addr", cfg.Addr, "base_url", cfg.BaseURL, "oauth_redirect", cfg.RedirectURL())
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = httpSrv.ListenAndServe()
+	stop() // if the server failed on its own, end the background work too
+	bg.Wait()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

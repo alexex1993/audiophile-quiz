@@ -72,8 +72,8 @@ func TestProcess(t *testing.T) {
 					t.Errorf("%s: decode: %v", f, err)
 				}
 			}
-			if _, err := os.Stat(filepath.Join(out, "tmp.m4a")); !os.IsNotExist(err) {
-				t.Error("temporary m4a was not removed")
+			if tmp, _ := filepath.Glob(filepath.Join(out, "*.m4a")); len(tmp) > 0 {
+				t.Errorf("temporary m4a not removed: %v", tmp)
 			}
 		})
 	}
@@ -137,12 +137,16 @@ func TestReencode(t *testing.T) {
 	if _, err := Process(ctx, src, old, 10, 30, []string{"64k", "128k", "320k"}); err != nil {
 		t.Fatal(err)
 	}
-	size, err := Reencode(ctx, old, testBitrates)
+	synced := filepath.Join(dir, "synced")
+	size, err := Reencode(ctx, old, synced, testBitrates)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(old, EncodedFile("64k"))); !os.IsNotExist(err) {
-		t.Error("stale 64k clip was not removed")
+	if _, err := os.Stat(filepath.Join(synced, EncodedFile("64k"))); !os.IsNotExist(err) {
+		t.Error("stale 64k clip was copied")
+	}
+	if _, err := os.Stat(filepath.Join(old, EncodedFile("64k"))); err != nil {
+		t.Errorf("source directory was changed: %v", err)
 	}
 
 	// The result must be exactly what a fresh upload at the new bitrates gives.
@@ -159,7 +163,7 @@ func TestReencode(t *testing.T) {
 		files = append(files, EncodedFile(b))
 	}
 	for _, f := range files {
-		got, err := os.ReadFile(filepath.Join(old, f))
+		got, err := os.ReadFile(filepath.Join(synced, f))
 		if err != nil {
 			t.Fatal(err)
 		}

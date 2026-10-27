@@ -143,6 +143,9 @@ func writeStoreError(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusTooManyRequests, tr(r, "на сегодня попытки закончились — приходите позже", "you're out of attempts for today — come back later"))
 	case errors.Is(err, store.ErrNoTracks):
 		writeError(w, http.StatusConflict, tr(r, "библиотека треков пока пуста", "the track library is empty"))
+	case errors.Is(err, store.ErrClipsSyncing):
+		writeError(w, http.StatusServiceUnavailable, tr(r, "клипы этого уровня сейчас обновляются — попробуйте через несколько минут",
+			"this level's clips are being updated — try again in a few minutes"))
 	case errors.Is(err, store.ErrAttemptClosed):
 		writeError(w, http.StatusConflict, tr(r, "эта попытка уже завершена", "this attempt is already finished"))
 	case errors.Is(err, store.ErrNotAllAnswers):

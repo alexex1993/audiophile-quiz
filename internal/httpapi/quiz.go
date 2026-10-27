@@ -38,15 +38,17 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
-	tracks, err := s.store.CountActiveTracks(r.Context())
+	tracks, playable, err := s.store.CountPlayableTracks(r.Context())
 	if err != nil {
 		writeStoreError(w, r, err)
 		return
 	}
-	// Questions per level as an attempt would actually get them.
+	// Questions per level as an attempt would actually get them; a level
+	// whose clips SyncClips hasn't finished can't be started yet.
 	levels := make([]store.Difficulty, len(store.Difficulties))
 	for i, d := range store.Difficulties {
 		d.Questions = min(d.Questions, tracks)
+		d.Syncing = playable[d.Bitrate()] < d.Questions
 		levels[i] = d
 	}
 	// Guests can't play rated levels. Admins are left out of everyone else's
@@ -170,13 +172,19 @@ func (s *Server) handleQuizAudio(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, r, err)
 		return
 	}
+	d, ok := store.DifficultyByName(ref.Difficulty)
+	if !ok {
+		writeStoreError(w, r, fmt.Errorf("attempt has unknown difficulty %q", ref.Difficulty))
+		return
+	}
+	// Checked for both kinds: refusing only the AAC clip would give it away.
+	if !store.HasClip(ref.AACBitrate, d.Bitrate()) {
+		writeError(w, http.StatusServiceUnavailable, tr(r, "клип этого трека ещё перекодируется — попробуйте через пару минут",
+			"this track's clip is still being re-encoded — try again in a couple of minutes"))
+		return
+	}
 	name := audio.LosslessFile
 	if ref.Kind == store.KindAAC {
-		d, ok := store.DifficultyByName(ref.Difficulty)
-		if !ok {
-			writeStoreError(w, r, fmt.Errorf("attempt has unknown difficulty %q", ref.Difficulty))
-			return
-		}
 		name = audio.EncodedFile(d.Bitrate())
 	}
 	s.serveClip(w, r, ref.StorageDir, name)
